@@ -1,6 +1,37 @@
-import { NewGitlabClient } from './gitlabClient';
 import MockAdapter from 'axios-mock-adapter';
 import axios from 'axios';
+import { NewGitlabClient } from './gitlabClient';
+import { ProgressReporter } from '../utils/progressReporter';
+
+jest.mock('../utils/progressReporter', () => ({
+  __esModule: true,
+  ProgressReporter: jest.fn().mockImplementation((label: string) => ({
+    label,
+    setTotal: jest.fn(),
+    update: jest.fn(),
+    finish: jest.fn(),
+  })),
+}));
+
+type ProgressReporterInstance = {
+  label: string;
+  setTotal: jest.Mock;
+  update: jest.Mock;
+  finish: jest.Mock;
+};
+
+const getProgressMock = () => ProgressReporter as unknown as jest.Mock;
+const getProgressInstance = (index = 0): ProgressReporterInstance | undefined => {
+  const result = getProgressMock().mock.results[index];
+  return result?.value as ProgressReporterInstance | undefined;
+};
+
+const expectProgressFor = (label: string, index = 0): ProgressReporterInstance => {
+  const progress = getProgressInstance(index);
+  expect(progress).toBeDefined();
+  expect(progress?.label).toEqual(label);
+  return progress!;
+};
 
 let mock: MockAdapter;
 
@@ -10,6 +41,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  getProgressMock().mockClear();
   mock = new MockAdapter(axios);
 });
 
@@ -38,7 +70,7 @@ test('getAllProjects fetches every page of projects', async () => {
 
   mock.onGet('https://gitlab.example.com/api/v4/projects').replyOnce((config) => {
     expect(config.params).toEqual({ page: 1, per_page: 100 });
-    return [200, page1Projects, { 'x-next-page': '2' }];
+    return [200, page1Projects, { 'x-next-page': '2', 'x-total-pages': '2' }];
   });
 
   mock.onGet('https://gitlab.example.com/api/v4/projects').replyOnce((config) => {
@@ -49,6 +81,12 @@ test('getAllProjects fetches every page of projects', async () => {
   const projects = await client.getAllProjects();
 
   expect(projects).toEqual([...page1Projects, ...page2Projects]);
+
+  const progress = expectProgressFor('Fetching projects');
+  expect(progress?.setTotal).toHaveBeenCalledWith(2);
+  expect(progress?.update).toHaveBeenNthCalledWith(1, 1);
+  expect(progress?.update).toHaveBeenNthCalledWith(2, 2);
+  expect(progress?.finish).toHaveBeenCalledTimes(1);
 });
 
 test('getAllProjects stops iteration when API returns an empty page', async () => {
@@ -63,6 +101,11 @@ test('getAllProjects stops iteration when API returns an empty page', async () =
 
   expect(projects).toEqual([]);
   expect(mock.history.get).toHaveLength(1);
+
+  const progress = expectProgressFor('Fetching projects');
+  expect(progress?.update).not.toHaveBeenCalled();
+  expect(progress?.finish).not.toHaveBeenCalled();
+  expect(progress?.setTotal).not.toHaveBeenCalled();
 });
 
 test('getFileContent makes a GET request and returns data', async () => {
@@ -239,7 +282,7 @@ test('findDependencyFiles makes a GET request and returns dependency files acros
       page: 1,
       per_page: 20,
     },
-  }).reply(200, repositoryTreePage1, { 'x-next-page': '2' });
+  }).reply(200, repositoryTreePage1, { 'x-next-page': '2', 'x-total-pages': '2' });
 
   // Mock the second page of the repository tree
   mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}/repository/tree`, {
@@ -254,6 +297,12 @@ test('findDependencyFiles makes a GET request and returns dependency files acros
   const files = await client.findDependencyFiles(projectId, branch);
 
   expect(files).toEqual(['go.mod', 'composer.json']);
+
+  const progress = expectProgressFor('Fetching repository tree for 1');
+  expect(progress?.setTotal).toHaveBeenCalledWith(2);
+  expect(progress?.update).toHaveBeenNthCalledWith(1, 1);
+  expect(progress?.update).toHaveBeenNthCalledWith(2, 2);
+  expect(progress?.finish).toHaveBeenCalledTimes(1);
 });
 
 test('findDependencyFiles returns paths when monorepo flag is true', async () => {

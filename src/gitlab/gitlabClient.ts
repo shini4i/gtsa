@@ -1,4 +1,5 @@
 import axios, { AxiosRequestConfig, Method } from 'axios';
+import { ProgressReporter } from '../utils/progressReporter';
 
 export class GitlabClient {
   private readonly url: string;
@@ -46,9 +47,10 @@ export class GitlabClient {
     const projects: any[] = [];
     let page = 1;
     let hasNextPage = true;
+    const progress = new ProgressReporter('Fetching projects');
+    let fetchedPages = 0;
 
     while (hasNextPage) {
-      console.log(`Processing projects page ${page}...`);
       const response = await this.executeRequest('get', 'projects', null, {
         params: {
           page,
@@ -60,10 +62,25 @@ export class GitlabClient {
         break;
       }
 
+      const totalPagesHeader = response.headers['x-total-pages'];
+      if (totalPagesHeader) {
+        const totalPages = Number(totalPagesHeader);
+        if (!Number.isNaN(totalPages)) {
+          progress.setTotal(totalPages);
+        }
+      }
+
+      fetchedPages++;
+      progress.update(fetchedPages);
+
       projects.push(...response.data);
       const nextPageHeader = response.headers['x-next-page'];
       hasNextPage = Boolean(nextPageHeader && nextPageHeader !== '0');
       page++;
+    }
+
+    if (fetchedPages > 0) {
+      progress.finish();
     }
 
     return projects;
@@ -94,9 +111,10 @@ export class GitlabClient {
     let files: any[] = [];
     let page = 1;
     let hasNextPage = true;
+    const progress = new ProgressReporter(`Fetching repository tree for ${id}`);
+    let fetchedPages = 0;
 
     while (hasNextPage) {
-      console.log(`Processing repository tree page ${page} for project ${id}...`);
       const response = await this.executeRequest('get', `projects/${id}/repository/tree`, null, {
         params: {
           ref: branch,
@@ -106,10 +124,25 @@ export class GitlabClient {
         },
       });
 
+      const totalPagesHeader = response.headers['x-total-pages'];
+      if (totalPagesHeader) {
+        const totalPages = Number(totalPagesHeader);
+        if (!Number.isNaN(totalPages)) {
+          progress.setTotal(totalPages);
+        }
+      }
+
+      fetchedPages++;
+      progress.update(fetchedPages);
+
       files = files.concat(response.data);
       const nextPage = response.headers['x-next-page'];
       hasNextPage = nextPage !== '' && !isNaN(Number(nextPage));
       page++;
+    }
+
+    if (fetchedPages > 0) {
+      progress.finish();
     }
 
     // If it's a monorepo, files parameter contains path to file
