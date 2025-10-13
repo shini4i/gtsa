@@ -13,6 +13,10 @@ run: ## run adjust-token-scope script
 dry-run: ## run adjust-token-scope script in dry-run mode
 	@ts-node src/cli.ts -p $(PROJECT_ID) --dry-run --monorepo
 
+.PHONY: dry-run-all
+dry-run-all: ## run adjust-token-scope script against all projects in dry-run mode
+	@ts-node src/cli.ts --all --dry-run
+
 .PHONY: test
 test: ## run all test suites
 	@npm test

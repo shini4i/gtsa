@@ -30,6 +30,41 @@ test('getProject makes a GET request and returns data', async () => {
   expect(project).toEqual(projectData);
 });
 
+test('getAllProjects fetches every page of projects', async () => {
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+
+  const page1Projects = [{ id: 1 }, { id: 2 }];
+  const page2Projects = [{ id: 3 }];
+
+  mock.onGet('https://gitlab.example.com/api/v4/projects').replyOnce((config) => {
+    expect(config.params).toEqual({ page: 1, per_page: 100 });
+    return [200, page1Projects, { 'x-next-page': '2' }];
+  });
+
+  mock.onGet('https://gitlab.example.com/api/v4/projects').replyOnce((config) => {
+    expect(config.params).toEqual({ page: 2, per_page: 100 });
+    return [200, page2Projects, { 'x-next-page': '' }];
+  });
+
+  const projects = await client.getAllProjects();
+
+  expect(projects).toEqual([...page1Projects, ...page2Projects]);
+});
+
+test('getAllProjects stops iteration when API returns an empty page', async () => {
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+
+  mock.onGet('https://gitlab.example.com/api/v4/projects').replyOnce((config) => {
+    expect(config.params).toEqual({ page: 1, per_page: 100 });
+    return [200, [], { 'x-next-page': '2' }];
+  });
+
+  const projects = await client.getAllProjects();
+
+  expect(projects).toEqual([]);
+  expect(mock.history.get).toHaveLength(1);
+});
+
 test('getFileContent makes a GET request and returns data', async () => {
   const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
 
@@ -219,6 +254,20 @@ test('findDependencyFiles makes a GET request and returns dependency files acros
   const files = await client.findDependencyFiles(projectId, branch);
 
   expect(files).toEqual(['go.mod', 'composer.json']);
+});
+
+test('findDependencyFiles returns paths when monorepo flag is true', async () => {
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const projectId = '1';
+  const branch = 'master';
+
+  const monorepoTree = [{ path: 'apps/app1/go.mod' }, { path: 'apps/app1/package-lock.json' }, { path: 'README.md' }];
+
+  mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}/repository/tree`).reply(200, monorepoTree);
+
+  const files = await client.findDependencyFiles(projectId, branch, true);
+
+  expect(files).toEqual(['apps/app1/go.mod', 'apps/app1/package-lock.json']);
 });
 
 test('gitlab client should return the correct url', async () => {

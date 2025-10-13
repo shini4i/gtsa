@@ -42,6 +42,33 @@ export class GitlabClient {
     return (await this.executeRequest('get', `projects/${id}`)).data;
   }
 
+  async getAllProjects(perPage: number = 100) {
+    const projects: any[] = [];
+    let page = 1;
+    let hasNextPage = true;
+
+    while (hasNextPage) {
+      console.log(`Processing projects page ${page}...`);
+      const response = await this.executeRequest('get', 'projects', null, {
+        params: {
+          page,
+          per_page: perPage,
+        },
+      });
+
+      if (!Array.isArray(response.data) || response.data.length === 0) {
+        break;
+      }
+
+      projects.push(...response.data);
+      const nextPageHeader = response.headers['x-next-page'];
+      hasNextPage = Boolean(nextPageHeader && nextPageHeader !== '0');
+      page++;
+    }
+
+    return projects;
+  }
+
   async getProjectId(path_with_namespace: string) {
     return (await this.executeRequest('get', `projects/${encodeURIComponent(path_with_namespace)}`)).data.id;
   }
@@ -69,6 +96,7 @@ export class GitlabClient {
     let hasNextPage = true;
 
     while (hasNextPage) {
+      console.log(`Processing repository tree page ${page} for project ${id}...`);
       const response = await this.executeRequest('get', `projects/${id}/repository/tree`, null, {
         params: {
           ref: branch,

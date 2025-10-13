@@ -58,6 +58,49 @@ describe('NpmProcessor', () => {
 
     jest.resetAllMocks();
   });
+
+  test('handles package locks without dependency sections', async () => {
+    const mockFileContent = JSON.stringify({});
+    const mockGitlabUrl = 'https://gitlab.example.com';
+
+    const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl);
+
+    expect(result).toEqual([]);
+    expect(gitlabClient.getProject).not.toHaveBeenCalled();
+  });
+
+  test('ignores dependencies that do not point to GitLab packages', async () => {
+    const mockFileContent = JSON.stringify({
+      dependencies: {
+        packageA: { resolved: 'https://registry.npmjs.org/packageA/-/packageA-1.0.0.tgz' },
+      },
+    });
+    const mockGitlabUrl = 'https://gitlab.example.com';
+
+    const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl);
+
+    expect(result).toEqual([]);
+    expect(gitlabClient.getProject).not.toHaveBeenCalled();
+  });
+
+  test('logs an error when fetching a project fails', async () => {
+    const mockFileContent = JSON.stringify({
+      dependencies: {
+        packageA: { resolved: 'https://gitlab.example.com/api/v4/projects/4/packages' },
+      },
+    });
+    const mockGitlabUrl = 'https://gitlab.example.com';
+    const error = new Error('not found');
+    jest.spyOn(gitlabClient, 'getProject').mockRejectedValue(error);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl);
+
+    expect(result).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith('Error fetching project 4:', error);
+
+    errorSpy.mockRestore();
+  });
 });
 
 describe('escapeRegExp', () => {

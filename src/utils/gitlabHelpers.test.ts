@@ -1,5 +1,6 @@
-import { fetchDependencyFiles, fetchProjectDetails } from './gitlabHelpers';
-import { GitlabClient } from '../gitlab/gitlabClient';
+import { fetchDependencyFiles, fetchProjectDetails, getGitlabClient } from './gitlabHelpers';
+import { GitlabClient, NewGitlabClient } from '../gitlab/gitlabClient';
+import { NewClientConfig } from '../config/clientConfig';
 
 beforeAll(() => {
   jest.spyOn(console, 'error').mockImplementation(() => {
@@ -11,6 +12,7 @@ beforeAll(() => {
 });
 
 jest.mock('../gitlab/gitlabClient');
+jest.mock('../config/clientConfig');
 
 describe('gitlabHelpers', () => {
   let mockGitlabClient: jest.Mocked<GitlabClient>;
@@ -78,6 +80,22 @@ describe('gitlabHelpers', () => {
 
       await expect(fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, false)).rejects.toThrow(error);
       expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(projectId.toString(), defaultBranch, false);
+    });
+  });
+
+  describe('getGitlabClient', () => {
+    it('creates a client using configuration values', async () => {
+      (NewClientConfig as jest.Mock).mockReturnValue({
+        Url: 'https://gitlab.example.com',
+        Token: 'test-token',
+      });
+      (NewGitlabClient as unknown as jest.Mock).mockReturnValue('client-instance');
+
+      const client = await getGitlabClient();
+
+      expect(NewClientConfig).toHaveBeenCalled();
+      expect(NewGitlabClient).toHaveBeenCalledWith('https://gitlab.example.com', 'test-token');
+      expect(client).toBe('client-instance');
     });
   });
 });
