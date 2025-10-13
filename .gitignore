@@ -6,4 +6,3 @@ coverage
 dist
 
 .env
-.envrc
