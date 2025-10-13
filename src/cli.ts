@@ -2,13 +2,14 @@
 
 import { Command } from 'commander';
 import { adjustTokenScope, adjustTokenScopeForAllProjects } from './scripts/adjust-token-scope';
+import packageJson from '../package.json';
 
 const DEFAULT_REPORT_PATH = 'gitlab-token-scope-report.yaml';
 
 const program = new Command();
 
 program
-  .version('0.1.5')
+  .version(packageJson.version)
   .description('CLI tool for whitelisting CI_JOB_TOKEN in dependencies projects');
 
 program
