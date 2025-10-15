@@ -1,16 +1,19 @@
-import { createFileProcessor } from './fileProcessor';
+import { createFileProcessor, registerFileProcessor, resetFileProcessorRegistry } from './fileProcessor';
 import { GoModProcessor } from './goModProcessor';
 import { ComposerProcessor } from './composerProcessor';
 import { GitlabClient } from '../gitlab/gitlabClient';
 import { NpmProcessor } from './npmProcessor';
+import { FileProcessor } from './fileProcessor';
 
-const gitlabClient = new GitlabClient('https://gitlab.example.com', 'mytoken');
+const gitlabClient = {} as GitlabClient;
 
-beforeAll(() => {
-  jest.spyOn(console, 'error').mockImplementation(() => {
-  });
-  jest.spyOn(console, 'log').mockImplementation(() => {
-  });
+beforeEach(() => {
+  jest.spyOn(console, 'log').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
+  resetFileProcessorRegistry();
 });
 
 describe('createFileProcessor', () => {
@@ -35,9 +38,21 @@ describe('createFileProcessor', () => {
   });
 
   it('should log a message for unsupported file types', () => {
-    const consoleSpy = jest.spyOn(console, 'log');
     createFileProcessor('unsupported.file', gitlabClient);
-    expect(consoleSpy).toHaveBeenCalledWith('No processor available for file type: unsupported.file');
-    consoleSpy.mockRestore();
+    expect(console.log).toHaveBeenCalledWith('No processor available for file type: unsupported.file');
+  });
+
+  it('allows registering custom processors without editing core module', () => {
+    class CustomProcessor implements FileProcessor {
+      extractDependencies(): Promise<string[]> {
+        return Promise.resolve(['custom']);
+      }
+    }
+
+    registerFileProcessor('custom.lock', () => new CustomProcessor());
+
+    const processor = createFileProcessor('custom.lock', gitlabClient);
+
+    expect(processor).toBeInstanceOf(CustomProcessor);
   });
 });
