@@ -2,12 +2,12 @@
 
 # GitLab CI Job Token Scope Adjuster
 
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/shini4i/gitlab-token-scope-adjuster/publish.yaml?label=publish)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/shini4i/gitlab-token-scope-adjuster/tests.yaml?label=tests)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/shini4i/gtsa/publish.yaml?label=publish)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/shini4i/gtsa/tests.yaml?label=tests)
 ![NPM Downloads](https://img.shields.io/npm/dm/%40shini4i%2Fgitlab-token-scope-adjuster)
 ![NPM Version](https://img.shields.io/npm/v/%40shini4i%2Fgitlab-token-scope-adjuster)
-[![codecov](https://codecov.io/github/shini4i/gitlab-token-scope-adjuster/graph/badge.svg?token=ELQ6VQJ0Z5)](https://codecov.io/github/shini4i/gitlab-token-scope-adjuster)
-![GitHub License](https://img.shields.io/github/license/shini4i/gitlab-token-scope-adjuster)
+[![codecov](https://codecov.io/gh/shini4i/gtsa/graph/badge.svg?token=VE6BNL1A8O)](https://codecov.io/gh/shini4i/gtsa)
+![GitHub License](https://img.shields.io/github/license/shini4i/gtsa)
 
 </div>
 
