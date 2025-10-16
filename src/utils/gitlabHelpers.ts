@@ -1,6 +1,7 @@
 import { NewClientConfig } from '../config/clientConfig';
 import { GitlabApiError } from '../gitlab/errors';
 import { GitlabClient, GitlabClientOptions, NewGitlabClient } from '../gitlab/gitlabClient';
+import type { GitlabProject } from '../gitlab/types';
 import { formatError } from './errorFormatter';
 
 /**
@@ -30,7 +31,7 @@ export async function getGitlabClient(): Promise<GitlabClient> {
  * @param project - Project payload returned by GitLab.
  * @returns Promise that resolves once logging completes.
  */
-async function logProjectDetails(project: any): Promise<void> {
+async function logProjectDetails(project: GitlabProject): Promise<void> {
   console.log('Project name:', project.path_with_namespace);
   console.log('Default branch:', project.default_branch);
 }
@@ -43,7 +44,7 @@ async function logProjectDetails(project: any): Promise<void> {
  * @param context - Description of the attempted operation.
  * @throws The original error after logging.
  */
-async function handleFetchError(error: any, projectId: number, context: string): Promise<void> {
+async function handleFetchError(error: unknown, projectId: number, context: string): Promise<never> {
   console.error(`Failed to ${context} for project ID ${projectId}: ${formatError(error)}`);
   throw error;
 }
@@ -109,7 +110,7 @@ function createGitlabClientOptions(): GitlabClientOptions | undefined {
  * @returns Promise resolving to the project object, or `null` if not found.
  * @throws Error when the project cannot be retrieved for reasons other than not found.
  */
-export async function fetchProjectDetails(gitlabClient: GitlabClient, projectId: number) {
+export async function fetchProjectDetails(gitlabClient: GitlabClient, projectId: number): Promise<GitlabProject | null> {
   try {
     const project = await gitlabClient.getProject(projectId.toString());
     await logProjectDetails(project);
@@ -119,7 +120,7 @@ export async function fetchProjectDetails(gitlabClient: GitlabClient, projectId:
       console.warn(`Project ID ${projectId} not found or inaccessible. Skipping.`);
       return null;
     }
-    await handleFetchError(error, projectId, 'fetch project details');
+    return handleFetchError(error, projectId, 'fetch project details');
   }
 }
 
@@ -147,7 +148,12 @@ async function logDependencyFiles(dependencyFiles: string[]): Promise<void> {
  * @returns Promise resolving to an array of manifest paths; empty array when none are found or accessible.
  * @throws Error when GitLab returns an unexpected response.
  */
-export async function fetchDependencyFiles(gitlabClient: GitlabClient, projectId: number, defaultBranch: string, monorepo: boolean) {
+export async function fetchDependencyFiles(
+  gitlabClient: GitlabClient,
+  projectId: number,
+  defaultBranch: string,
+  monorepo: boolean,
+): Promise<string[]> {
   try {
     const dependencyFiles = await gitlabClient.findDependencyFiles(projectId.toString(), defaultBranch, monorepo);
     await logDependencyFiles(dependencyFiles);
@@ -157,6 +163,6 @@ export async function fetchDependencyFiles(gitlabClient: GitlabClient, projectId
       console.warn(`Repository tree not found for project ID ${projectId}; proceeding without dependency files.`);
       return [];
     }
-    await handleFetchError(error, projectId, 'fetch dependency files');
+    return handleFetchError(error, projectId, 'fetch dependency files');
   }
 }

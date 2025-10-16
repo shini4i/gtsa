@@ -22,9 +22,9 @@ This checklist captures agreed-upon enhancements for `@shini4i/gitlab-token-scop
 - [ ] Benchmark large-project scenarios and document performance expectations.
 
 ## Developer Experience
-- [ ] Wrap Axios usage in an injectable transport layer to simplify testing.
-- [ ] Centralize CLI flag definitions and help text in a declarative schema.
-- [ ] Provide typed interfaces for GitLab responses instead of `any`.
+- [x] Wrap Axios usage in an injectable transport layer to simplify testing.
+- [x] Centralize CLI flag definitions and help text in a declarative schema.
+- [x] Provide typed interfaces for GitLab responses instead of `any`.
 
 ## Observability
 - [ ] Replace direct `console` calls with a configurable logger supporting log levels and structured output.

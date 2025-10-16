@@ -4,22 +4,14 @@ import { Command } from 'commander';
 import { adjustTokenScope, adjustTokenScopeForAllProjects } from './scripts/adjust-token-scope';
 import { formatError, setDebugLogging } from './utils/errorFormatter';
 import packageJson from '../package.json';
-
-const DEFAULT_REPORT_PATH = 'gitlab-token-scope-report.yaml';
+import { configureCli, DEFAULT_REPORT_PATH } from './config/cliOptions';
 
 const program = new Command();
 
-program
-  .version(packageJson.version)
-  .description('CLI tool for whitelisting CI_JOB_TOKEN in dependencies projects');
+program.version(packageJson.version);
+configureCli(program);
 
 program
-  .option('-p, --project-id <id>', 'The project ID')
-  .option('--all', 'Process all projects available to the configured token')
-  .option('--dry-run', 'Print out which projects will be updated for access without performing the actual update')
-  .option('--report [path]', `Generate a YAML report when used with --all and --dry-run (default path: ${DEFAULT_REPORT_PATH})`)
-  .option('--monorepo', 'Consider project as a monorepo and find files recursively')
-  .option('--debug', 'Print full error stack traces for troubleshooting')
   .action(async (options) => {
     const { projectId, dryRun, monorepo, all, report, debug } = options;
     setDebugLogging(Boolean(debug));

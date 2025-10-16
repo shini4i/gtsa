@@ -1,6 +1,13 @@
-import axios, { AxiosInstance, AxiosRequestConfig, Method } from 'axios';
+import axios, { AxiosInstance, Method } from 'axios';
 import { ProgressReporter } from '../utils/progressReporter';
 import { GitlabApiError } from './errors';
+import { AxiosHttpTransport, HttpRequestConfig, HttpResponse, HttpTransport } from './httpTransport';
+import type {
+  GitlabJobTokenAllowlistEntry,
+  GitlabProject,
+  GitlabRepositoryFile,
+  GitlabRepositoryTreeItem,
+} from './types';
 
 /**
  * Optional overrides that influence how the GitLab API client behaves.
@@ -8,18 +15,22 @@ import { GitlabApiError } from './errors';
  * @property timeoutMs - Request timeout in milliseconds.
  * @property maxRetries - Number of retry attempts for retryable responses.
  * @property retryDelayMs - Base delay between retries in milliseconds.
- * @property httpClient - Custom axios instance to use instead of the default.
+ * @property httpClient - Custom axios instance to use instead of the default when Axios transport is desired.
+ * @property transport - Fully custom HTTP transport implementation for advanced scenarios or testing.
  */
 export interface GitlabClientOptions {
   timeoutMs?: number;
   maxRetries?: number;
   retryDelayMs?: number;
   httpClient?: AxiosInstance;
+  transport?: HttpTransport;
 }
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 500;
+
+type RequestOverrides = Pick<HttpRequestConfig, 'headers' | 'params'>;
 
 /**
  * Thin wrapper around the GitLab REST API that injects authentication headers and
@@ -28,7 +39,7 @@ const DEFAULT_RETRY_DELAY_MS = 500;
 export class GitlabClient {
   private readonly url: string;
   private readonly token: string;
-  private readonly httpClient: AxiosInstance;
+  private readonly transport: HttpTransport;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
   private readonly baseUrl: string;
@@ -45,9 +56,14 @@ export class GitlabClient {
     this.token = Token;
     this.baseUrl = `${this.url}/api/v4`;
 
-    this.httpClient = options.httpClient ?? axios.create();
-    this.httpClient.defaults.baseURL = this.baseUrl;
-    this.httpClient.defaults.timeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    if (options.transport) {
+      this.transport = options.transport;
+    } else {
+      const axiosInstance = options.httpClient ?? axios.create();
+      axiosInstance.defaults.baseURL = this.baseUrl;
+      axiosInstance.defaults.timeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      this.transport = new AxiosHttpTransport(axiosInstance);
+    }
 
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
@@ -62,27 +78,32 @@ export class GitlabClient {
     return this.url;
   }
 
-  private async executeRequest(method: Method, endpoint: string, data?: unknown, config?: AxiosRequestConfig): Promise<any> {
+  private async executeRequest<T = unknown>(
+    method: Method,
+    endpoint: string,
+    data?: unknown,
+    config?: RequestOverrides,
+  ): Promise<HttpResponse<T>> {
     const fullEndpoint = `${this.baseUrl}/${endpoint}`;
     const headers = {
       'PRIVATE-TOKEN': this.token,
       'Content-Type': 'application/json',
-      ...(config?.headers || {}),
+      ...(config?.headers ?? {}),
     };
 
-    const axiosConfig: AxiosRequestConfig = {
-      ...config,
+    const requestConfig: HttpRequestConfig = {
       method,
       url: endpoint,
       headers,
       data,
+      params: config?.params,
     };
 
     const maxAttempts = Math.max(1, this.maxRetries + 1);
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        return await this.httpClient.request(axiosConfig);
+        return await this.transport.request<T>(requestConfig);
       } catch (error) {
         const apiError = GitlabApiError.fromUnknown(error, method, fullEndpoint);
         if (attempt < maxAttempts && apiError.retryable) {
@@ -92,6 +113,12 @@ export class GitlabClient {
         throw apiError;
       }
     }
+
+    throw new GitlabApiError('GitLab API request exhausted retry attempts.', {
+      method,
+      endpoint: fullEndpoint,
+      retryable: false,
+    });
   }
 
   private async delay(ms: number) {
@@ -104,8 +131,8 @@ export class GitlabClient {
    * @param id - Numeric project identifier as a string.
    * @returns Promise that resolves to the project payload returned by GitLab.
    */
-  async getProject(id: string) {
-    return (await this.executeRequest('get', `projects/${id}`)).data;
+  async getProject(id: string): Promise<GitlabProject> {
+    return (await this.executeRequest<GitlabProject>('get', `projects/${id}`)).data;
   }
 
   /**
@@ -114,15 +141,15 @@ export class GitlabClient {
    * @param perPage - Page size requested from the GitLab API (default 100).
    * @returns Promise that resolves to a list of project objects.
    */
-  async getAllProjects(perPage: number = 100) {
-    const projects: any[] = [];
+  async getAllProjects(perPage: number = 100): Promise<GitlabProject[]> {
+    const projects: GitlabProject[] = [];
     let page = 1;
     let hasNextPage = true;
     const progress = new ProgressReporter('Fetching projects');
     let fetchedPages = 0;
 
     while (hasNextPage) {
-      const response = await this.executeRequest('get', 'projects', null, {
+      const response = await this.executeRequest<GitlabProject[]>('get', 'projects', undefined, {
         params: {
           page,
           per_page: perPage,
@@ -163,8 +190,11 @@ export class GitlabClient {
    * @param path_with_namespace - Full namespace-qualified project path.
    * @returns Promise that resolves to the numeric ID for the project.
    */
-  async getProjectId(path_with_namespace: string) {
-    return (await this.executeRequest('get', `projects/${encodeURIComponent(path_with_namespace)}`)).data.id;
+  async getProjectId(path_with_namespace: string): Promise<number> {
+    return (await this.executeRequest<GitlabProject>(
+      'get',
+      `projects/${encodeURIComponent(path_with_namespace)}`,
+    )).data.id;
   }
 
   /**
@@ -174,9 +204,12 @@ export class GitlabClient {
    * @param depProjectId - Dependency project to inspect.
    * @returns Promise resolving to `true` when the dependency allow list already includes the source project.
    */
-  async isProjectWhitelisted(sourceProjectId: number, depProjectId: number) {
-    const allowList = (await this.executeRequest('get', `projects/${depProjectId}/job_token_scope/allowlist`)).data;
-    return allowList.some((project: any) => project.id === sourceProjectId);
+  async isProjectWhitelisted(sourceProjectId: number, depProjectId: number): Promise<boolean> {
+    const allowList = (await this.executeRequest<GitlabJobTokenAllowlistEntry[]>(
+      'get',
+      `projects/${depProjectId}/job_token_scope/allowlist`,
+    )).data;
+    return allowList.some(project => project.id === sourceProjectId);
   }
 
   /**
@@ -200,23 +233,27 @@ export class GitlabClient {
    * @param isMonorepo - When true, traverses the tree recursively to support monorepo layouts.
    * @returns Promise resolving to discovered file paths relative to the repository root.
    */
-  async findDependencyFiles(id: string, branch: string, isMonorepo: boolean = false) {
+  async findDependencyFiles(id: string, branch: string, isMonorepo: boolean = false): Promise<string[]> {
     const targetFiles = ['go.mod', 'composer.json', 'package-lock.json'];
-    let files: any[] = [];
+    let files: GitlabRepositoryTreeItem[] = [];
     let page = 1;
     let hasNextPage = true;
     const progress = new ProgressReporter(`Fetching repository tree for ${id}`);
     let fetchedPages = 0;
 
     while (hasNextPage) {
-      const response = await this.executeRequest('get', `projects/${id}/repository/tree`, null, {
-        params: {
-          ref: branch,
-          recursive: isMonorepo, //Use isMonorepo flag to decide whether to fetch files recursively
-          page,
-          per_page: 20,
-        },
-      });
+      const response = await this.executeRequest<GitlabRepositoryTreeItem[]>(
+        'get',
+        `projects/${id}/repository/tree`,
+        undefined,
+        {
+          params: {
+            ref: branch,
+            recursive: isMonorepo, //Use isMonorepo flag to decide whether to fetch files recursively
+            page,
+            per_page: 20,
+          },
+        });
 
       const totalPagesHeader = response.headers['x-total-pages'];
       if (totalPagesHeader) {
@@ -240,8 +277,9 @@ export class GitlabClient {
     }
 
     // If it's a monorepo, files parameter contains path to file
-    return files.map((f: { path: any; name: any; }) => isMonorepo ? f.path : f.name)
-      .filter((name: string) => targetFiles.some(file => name.endsWith(file)));
+    return files
+      .map(file => (isMonorepo ? file.path : file.name))
+      .filter((name): name is string => typeof name === 'string' && targetFiles.some(file => name.endsWith(file)));
   }
 
   /**
@@ -253,9 +291,14 @@ export class GitlabClient {
    * @returns Promise resolving to the UTF-8 decoded file contents.
    * @throws Error when GitLab returns an unexpected encoding.
    */
-  async getFileContent(id: number, file_path: string, branch: string) {
+  async getFileContent(id: number, file_path: string, branch: string): Promise<string> {
     const encodedFilePath = encodeURIComponent(file_path);
-    const response = await this.executeRequest('get', `projects/${id}/repository/files/${encodedFilePath}`, null, { params: { ref: branch } });
+    const response = await this.executeRequest<GitlabRepositoryFile>(
+      'get',
+      `projects/${id}/repository/files/${encodedFilePath}`,
+      undefined,
+      { params: { ref: branch } },
+    );
 
     if (response.data.encoding !== 'base64') {
       throw new Error('Unexpected encoding of file content received from GitLab API');

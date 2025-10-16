@@ -1,4 +1,5 @@
 import { adjustTokenScope, adjustTokenScopeForAllProjects } from './scripts/adjust-token-scope';
+import { cliSchema, DEFAULT_REPORT_PATH } from './config/cliOptions';
 
 jest.mock('./scripts/adjust-token-scope', () => ({
   adjustTokenScope: jest.fn().mockResolvedValue(undefined),
@@ -96,6 +97,15 @@ describe('cli entrypoint', () => {
     errorSpy.mockRestore();
   });
 
+  it('registers CLI options and description from schema', async () => {
+    const { program } = await initializeCli();
+
+    expect(program.description).toHaveBeenCalledWith(cliSchema.description);
+    cliSchema.options.forEach(option => {
+      expect(program.option).toHaveBeenCalledWith(option.flags, option.description);
+    });
+  });
+
   it('rejects using --all together with --project-id', async () => {
     const { exitError } = await runCli({ all: true, projectId: '1' });
 
@@ -137,7 +147,7 @@ describe('cli entrypoint', () => {
     const { exitError } = await runCli({ all: true, dryRun: true, report: true, monorepo: undefined });
 
     expect(exitError).toBeUndefined();
-    expect(mockedAdjustTokenScopeForAllProjects).toHaveBeenCalledWith(true, false, 'gitlab-token-scope-report.yaml');
+    expect(mockedAdjustTokenScopeForAllProjects).toHaveBeenCalledWith(true, false, DEFAULT_REPORT_PATH);
     expect(logSpy).toHaveBeenCalledWith('Finished adjusting token scope for all projects!');
   });
 

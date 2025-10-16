@@ -106,8 +106,8 @@ describe('TokenScopeAdjuster', () => {
 
     test('skips projects without an ID', async () => {
       gitlabClientMock.getAllProjects.mockResolvedValue([
-        { id: 1 },
-        { path_with_namespace: 'missing-id' },
+        { id: 1, path_with_namespace: 'existing', default_branch: 'main' },
+        { path_with_namespace: 'missing-id', default_branch: 'main' } as any,
       ]);
       jest.spyOn(adjuster, 'adjustProject').mockResolvedValue(null);
 
@@ -129,7 +129,7 @@ describe('TokenScopeAdjuster', () => {
         dependencies: ['dep'],
       };
 
-      gitlabClientMock.getAllProjects.mockResolvedValue([{ id: 1 }]);
+      gitlabClientMock.getAllProjects.mockResolvedValue([{ id: 1, path_with_namespace: 'group/project-1', default_branch: 'main' }]);
       jest.spyOn(adjuster, 'adjustProject').mockResolvedValue(expectedEntry);
 
       const entries = await adjuster.adjustAllProjects({ dryRun: true, monorepo: false, reporter });
@@ -141,7 +141,7 @@ describe('TokenScopeAdjuster', () => {
     });
 
     test('logs errors from project adjustments and throws aggregated error', async () => {
-      gitlabClientMock.getAllProjects.mockResolvedValue([{ id: 1 }]);
+      gitlabClientMock.getAllProjects.mockResolvedValue([{ id: 1, path_with_namespace: 'group/project-1', default_branch: 'main' }]);
       const expectedError = new Error('boom');
       jest.spyOn(adjuster, 'adjustProject').mockRejectedValue(expectedError);
 

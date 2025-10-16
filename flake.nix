@@ -16,6 +16,7 @@
           packages = [
             nodejs
             pkgs.nodePackages.ts-node
+            pkgs.go-task
           ];
 
           shellHook = ''

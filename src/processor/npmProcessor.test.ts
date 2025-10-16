@@ -28,10 +28,16 @@ describe('NpmProcessor', () => {
     const mockGitlabUrl = 'https://gitlab.example.com';
 
     jest.spyOn(gitlabClient, 'getProject').mockImplementation((projectId) => {
-      if (projectId === '1') return Promise.resolve({ path_with_namespace: 'namespaceA/projectA' });
-      if (projectId === '2') return Promise.resolve({ path_with_namespace: 'namespaceB/projectB' });
-      if (projectId === '3') return Promise.resolve({ path_with_namespace: 'namespaceC/projectC' });
-      return Promise.resolve({});
+      if (projectId === '1') {
+        return Promise.resolve({ id: 1, path_with_namespace: 'namespaceA/projectA', default_branch: 'main' });
+      }
+      if (projectId === '2') {
+        return Promise.resolve({ id: 2, path_with_namespace: 'namespaceB/projectB', default_branch: 'main' });
+      }
+      if (projectId === '3') {
+        return Promise.resolve({ id: 3, path_with_namespace: 'namespaceC/projectC', default_branch: 'main' });
+      }
+      return Promise.resolve({ id: Number(projectId), path_with_namespace: '', default_branch: 'main' });
     });
 
     const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl);

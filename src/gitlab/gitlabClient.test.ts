@@ -2,6 +2,7 @@ import MockAdapter from 'axios-mock-adapter';
 import axios, { AxiosInstance } from 'axios';
 import { GitlabApiError } from './errors';
 import { NewGitlabClient } from './gitlabClient';
+import type { HttpTransport } from './httpTransport';
 import { ProgressReporter } from '../utils/progressReporter';
 
 jest.mock('../utils/progressReporter', () => ({
@@ -50,6 +51,32 @@ beforeEach(() => {
 
 afterEach(() => {
   mock.restore();
+});
+
+test('getProject uses injected transport implementation', async () => {
+  const transport: HttpTransport = {
+    request: jest.fn().mockResolvedValue({
+      data: { id: 1, path_with_namespace: 'group/project', default_branch: 'main' },
+      headers: {},
+      status: 200,
+    }),
+  };
+
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { transport });
+
+  const project = await client.getProject('1');
+
+  expect(project).toEqual({ id: 1, path_with_namespace: 'group/project', default_branch: 'main' });
+  expect(transport.request).toHaveBeenCalledWith({
+    method: 'get',
+    url: 'projects/1',
+    headers: expect.objectContaining({
+      'PRIVATE-TOKEN': 'MyToken',
+      'Content-Type': 'application/json',
+    }),
+    data: undefined,
+    params: undefined,
+  });
 });
 
 test('getProject makes a GET request and returns data', async () => {

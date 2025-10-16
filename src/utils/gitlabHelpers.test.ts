@@ -31,6 +31,7 @@ describe('gitlabHelpers', () => {
     it('should fetch project details successfully', async () => {
       const projectId = 1;
       const projectDetails = {
+        id: projectId,
         path_with_namespace: 'namespace/project',
         default_branch: 'main',
       };
