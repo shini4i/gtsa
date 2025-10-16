@@ -172,6 +172,16 @@ describe('cli entrypoint', () => {
 
     expect(exitError).toBeInstanceOf(ExitError);
     expect(exitError?.code).toBe(1);
-    expect(errorSpy).toHaveBeenCalledWith('Failed to adjust token scope:', expect.any(Error));
+    expect(errorSpy).toHaveBeenCalledWith('Failed to adjust token scope: boom');
+  });
+
+  it('prints stack trace when debug flag is enabled', async () => {
+    mockedAdjustTokenScope.mockRejectedValueOnce(new Error('boom'));
+
+    const { exitError } = await runCli({ projectId: '1', debug: true });
+
+    expect(exitError).toBeInstanceOf(ExitError);
+    expect(exitError?.code).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to adjust token scope: Error: boom'));
   });
 });

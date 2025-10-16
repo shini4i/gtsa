@@ -1,4 +1,5 @@
 import { ProjectReportEntry, writeYamlReport } from '../report/reportGenerator';
+import { formatError } from '../utils/errorFormatter';
 
 export class DryRunReporter {
   private readonly entries: ProjectReportEntry[] = [];
@@ -12,7 +13,7 @@ export class DryRunReporter {
       console.log(`Dry run report initialized at ${this.reportPath}`);
       this.ready = true;
     } catch (error) {
-      console.error(`Failed to initialize dry run report at ${this.reportPath}:`, error);
+      console.error(`Failed to initialize dry run report at ${this.reportPath}: ${formatError(error)}`);
     }
   }
 
@@ -27,7 +28,7 @@ export class DryRunReporter {
       await writeYamlReport(this.entries, this.reportPath);
       console.log(`Dry run report updated with ${entry.projectName}`);
     } catch (error) {
-      console.error(`Failed to update dry run report at ${this.reportPath}:`, error);
+      console.error(`Failed to update dry run report at ${this.reportPath}: ${formatError(error)}`);
       this.ready = false;
     }
   }

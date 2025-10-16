@@ -1,22 +1,45 @@
-import axios, { AxiosRequestConfig, Method } from 'axios';
+import axios, { AxiosInstance, AxiosRequestConfig, Method } from 'axios';
 import { ProgressReporter } from '../utils/progressReporter';
+import { GitlabApiError } from './errors';
+
+export interface GitlabClientOptions {
+  timeoutMs?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
+  httpClient?: AxiosInstance;
+}
+
+const DEFAULT_TIMEOUT_MS = 10000;
+const DEFAULT_MAX_RETRIES = 2;
+const DEFAULT_RETRY_DELAY_MS = 500;
 
 export class GitlabClient {
   private readonly url: string;
   private readonly token: string;
+  private readonly httpClient: AxiosInstance;
+  private readonly maxRetries: number;
+  private readonly retryDelayMs: number;
+  private readonly baseUrl: string;
 
-  constructor(Url: string, Token: string) {
+  constructor(Url: string, Token: string, options: GitlabClientOptions = {}) {
     this.url = Url;
     this.token = Token;
+    this.baseUrl = `${this.url}/api/v4`;
+
+    this.httpClient = options.httpClient ?? axios.create();
+    this.httpClient.defaults.baseURL = this.baseUrl;
+    this.httpClient.defaults.timeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+    this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
   }
 
   get Url(): string {
     return this.url;
   }
 
-  private async executeRequest(method: Method, endpoint: string, data?: any, config?: any): Promise<any> {
-    const url = `${this.url}/api/v4/${endpoint}`;
-
+  private async executeRequest(method: Method, endpoint: string, data?: unknown, config?: AxiosRequestConfig): Promise<any> {
+    const fullEndpoint = `${this.baseUrl}/${endpoint}`;
     const headers = {
       'PRIVATE-TOKEN': this.token,
       'Content-Type': 'application/json',
@@ -26,17 +49,29 @@ export class GitlabClient {
     const axiosConfig: AxiosRequestConfig = {
       ...config,
       method,
-      url,
+      url: endpoint,
       headers,
       data,
     };
 
-    try {
-      return await axios(axiosConfig);
-    } catch (error) {
-      console.error(`Request failed: ${method} ${url}`);
-      throw error;
+    const maxAttempts = Math.max(1, this.maxRetries + 1);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await this.httpClient.request(axiosConfig);
+      } catch (error) {
+        const apiError = GitlabApiError.fromUnknown(error, method, fullEndpoint);
+        if (attempt < maxAttempts && apiError.retryable) {
+          await this.delay(this.retryDelayMs * attempt);
+          continue;
+        }
+        throw apiError;
+      }
     }
+  }
+
+  private async delay(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   async getProject(id: string) {
@@ -91,13 +126,8 @@ export class GitlabClient {
   }
 
   async isProjectWhitelisted(sourceProjectId: number, depProjectId: number) {
-    try {
-      const allowList = (await this.executeRequest('get', `projects/${depProjectId}/job_token_scope/allowlist`)).data;
-      return allowList.some((project: any) => project.id === sourceProjectId);
-    } catch (error) {
-      console.error(`Request failed: GET job_token_scope/allowlist`);
-      throw error;
-    }
+    const allowList = (await this.executeRequest('get', `projects/${depProjectId}/job_token_scope/allowlist`)).data;
+    return allowList.some((project: any) => project.id === sourceProjectId);
   }
 
   async allowCiJobTokenAccess(sourceProjectId: string, targetProjectId: string) {
@@ -162,6 +192,6 @@ export class GitlabClient {
   }
 }
 
-export function NewGitlabClient(Url: string, Token: string) {
-  return new GitlabClient(Url, Token);
+export function NewGitlabClient(Url: string, Token: string, options?: GitlabClientOptions) {
+  return new GitlabClient(Url, Token, options);
 }

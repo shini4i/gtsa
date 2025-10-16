@@ -1,5 +1,7 @@
 import { NewClientConfig } from '../config/clientConfig';
-import { GitlabClient, NewGitlabClient } from '../gitlab/gitlabClient';
+import { GitlabApiError } from '../gitlab/errors';
+import { GitlabClient, GitlabClientOptions, NewGitlabClient } from '../gitlab/gitlabClient';
+import { formatError } from './errorFormatter';
 
 /**
  * Creates the GitLab client configuration.
@@ -16,7 +18,8 @@ function createGitlabClientConfig(): { url: string; token: string } {
  */
 export async function getGitlabClient(): Promise<GitlabClient> {
   const { url, token } = createGitlabClientConfig();
-  return NewGitlabClient(url, token);
+  const options = createGitlabClientOptions();
+  return options ? NewGitlabClient(url, token, options) : NewGitlabClient(url, token);
 }
 
 /**
@@ -37,8 +40,54 @@ async function logProjectDetails(project: any): Promise<void> {
  * @returns {Promise<void>} A promise that resolves when the error handling is complete.
  */
 async function handleFetchError(error: any, projectId: number, context: string): Promise<void> {
-  console.error(`Failed to ${context} for project ID ${projectId}:`, error);
+  console.error(`Failed to ${context} for project ID ${projectId}: ${formatError(error)}`);
   throw error;
+}
+
+/**
+ * Parses numeric environment variables for GitLab HTTP configuration.
+ */
+function parseNumberEnv(name: string, min?: number): number | undefined {
+  const rawValue = process.env[name];
+  if (rawValue === undefined || rawValue === '') {
+    return undefined;
+  }
+
+  const parsedValue = Number.parseInt(rawValue, 10);
+  if (Number.isNaN(parsedValue)) {
+    throw new Error(`${name} must be a valid integer, but received "${rawValue}"`);
+  }
+
+  if (min !== undefined && parsedValue < min) {
+    throw new Error(`${name} must be greater than or equal to ${min}, but received ${parsedValue}`);
+  }
+
+  return parsedValue;
+}
+
+/**
+ * Builds GitLab client HTTP resilience options from the environment.
+ */
+function createGitlabClientOptions(): GitlabClientOptions | undefined {
+  const timeoutMs = parseNumberEnv('GITLAB_HTTP_TIMEOUT_MS', 1);
+  const maxRetries = parseNumberEnv('GITLAB_HTTP_MAX_RETRIES', 0);
+  const retryDelayMs = parseNumberEnv('GITLAB_HTTP_RETRY_DELAY_MS', 0);
+
+  const options: GitlabClientOptions = {};
+
+  if (timeoutMs !== undefined) {
+    options.timeoutMs = timeoutMs;
+  }
+
+  if (maxRetries !== undefined) {
+    options.maxRetries = maxRetries;
+  }
+
+  if (retryDelayMs !== undefined) {
+    options.retryDelayMs = retryDelayMs;
+  }
+
+  return Object.keys(options).length > 0 ? options : undefined;
 }
 
 /**
@@ -53,6 +102,10 @@ export async function fetchProjectDetails(gitlabClient: GitlabClient, projectId:
     await logProjectDetails(project);
     return project;
   } catch (error) {
+    if (error instanceof GitlabApiError && error.statusCode === 404) {
+      console.warn(`Project ID ${projectId} not found or inaccessible. Skipping.`);
+      return null;
+    }
     await handleFetchError(error, projectId, 'fetch project details');
   }
 }
@@ -84,6 +137,10 @@ export async function fetchDependencyFiles(gitlabClient: GitlabClient, projectId
     await logDependencyFiles(dependencyFiles);
     return dependencyFiles;
   } catch (error) {
+    if (error instanceof GitlabApiError && error.statusCode === 404) {
+      console.warn(`Repository tree not found for project ID ${projectId}; proceeding without dependency files.`);
+      return [];
+    }
     await handleFetchError(error, projectId, 'fetch dependency files');
   }
 }

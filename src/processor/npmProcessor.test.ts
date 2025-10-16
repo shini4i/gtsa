@@ -97,7 +97,7 @@ describe('NpmProcessor', () => {
     const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl);
 
     expect(result).toEqual([]);
-    expect(errorSpy).toHaveBeenCalledWith('Error fetching project 4:', error);
+    expect(errorSpy).toHaveBeenCalledWith('Error fetching project 4: not found');
 
     errorSpy.mockRestore();
   });

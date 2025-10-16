@@ -1,4 +1,5 @@
 import { FileProcessor } from './fileProcessor';
+import { formatError } from '../utils/errorFormatter';
 
 interface Repository {
   type: string;
@@ -24,7 +25,7 @@ export class ComposerProcessor implements FileProcessor {
         }
       }
     } catch (error) {
-      console.error('Failed to parse composer.json file:', error);
+      console.error(`Failed to parse composer.json file: ${formatError(error)}`);
     }
 
     return Promise.resolve(dependencies);

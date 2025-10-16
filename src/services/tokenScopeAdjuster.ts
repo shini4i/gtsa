@@ -3,6 +3,7 @@ import { processDependencies } from '../utils/dependencyProcessor';
 import { ProjectReportEntry } from '../report/reportGenerator';
 import { DependencyScanner } from './dependencyScanner';
 import { DryRunReporter } from './reportingService';
+import { formatError } from '../utils/errorFormatter';
 
 export interface AdjustProjectOptions {
   dryRun: boolean;
@@ -11,6 +12,21 @@ export interface AdjustProjectOptions {
 
 export interface AdjustAllProjectsOptions extends AdjustProjectOptions {
   reporter?: DryRunReporter;
+}
+
+export interface ProjectAdjustmentFailure {
+  projectId: number;
+  cause: unknown;
+}
+
+export class AdjustAllProjectsError extends Error {
+  readonly failures: ProjectAdjustmentFailure[];
+
+  constructor(failures: ProjectAdjustmentFailure[], message?: string) {
+    super(message ?? `Failed to adjust token scope for ${failures.length} project(s).`);
+    this.name = 'AdjustAllProjectsError';
+    this.failures = failures;
+  }
 }
 
 export class TokenScopeAdjuster {
@@ -54,6 +70,7 @@ export class TokenScopeAdjuster {
     }
 
     const collectedEntries: ProjectReportEntry[] = [];
+    const failures: ProjectAdjustmentFailure[] = [];
 
     if (options.dryRun && options.reporter) {
       await options.reporter.initialize();
@@ -76,12 +93,20 @@ export class TokenScopeAdjuster {
           }
         }
       } catch (error) {
-        console.error(`Failed to adjust token scope for project ID ${project.id}:`, error);
+        console.error(`Failed to adjust token scope for project ID ${project.id}: ${formatError(error)}`);
+        failures.push({ projectId: project.id, cause: error });
       }
     }
 
     if (options.dryRun && options.reporter) {
       options.reporter.finalize();
+    }
+
+    if (failures.length > 0) {
+      const summary = failures
+        .map(failure => `project ${failure.projectId}: ${(failure.cause instanceof Error && failure.cause.message) ? failure.cause.message : 'Unknown error'}`)
+        .join('; ');
+      throw new AdjustAllProjectsError(failures, `Failed to adjust token scope for ${failures.length} project(s): ${summary}`);
     }
 
     return collectedEntries;

@@ -1,6 +1,7 @@
 import { fetchDependencyFiles, fetchProjectDetails, getGitlabClient } from './gitlabHelpers';
 import { GitlabClient, NewGitlabClient } from '../gitlab/gitlabClient';
 import { NewClientConfig } from '../config/clientConfig';
+import { GitlabApiError } from '../gitlab/errors';
 
 beforeAll(() => {
   jest.spyOn(console, 'error').mockImplementation(() => {
@@ -48,6 +49,23 @@ describe('gitlabHelpers', () => {
       await expect(fetchProjectDetails(mockGitlabClient, projectId)).rejects.toThrow(error);
       expect(mockGitlabClient.getProject).toHaveBeenCalledWith(projectId.toString());
     });
+
+    it('returns null and warns when project details 404', async () => {
+      const projectId = 1;
+      const apiError = new GitlabApiError('Not Found', {
+        method: 'get',
+        endpoint: 'projects/1',
+        statusCode: 404,
+        retryable: false,
+      });
+      mockGitlabClient.getProject.mockRejectedValue(apiError);
+
+      const result = await fetchProjectDetails(mockGitlabClient, projectId);
+
+      expect(result).toBeNull();
+      expect(mockGitlabClient.getProject).toHaveBeenCalledWith(projectId.toString());
+      expect(console.warn).toHaveBeenCalledWith('Project ID 1 not found or inaccessible. Skipping.');
+    });
   });
 
   describe('fetchDependencyFiles', () => {
@@ -81,6 +99,23 @@ describe('gitlabHelpers', () => {
       await expect(fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, false)).rejects.toThrow(error);
       expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(projectId.toString(), defaultBranch, false);
     });
+
+    it('returns empty array and warns when repository tree 404', async () => {
+      const projectId = 1;
+      const defaultBranch = 'main';
+      const apiError = new GitlabApiError('Tree Not Found', {
+        method: 'get',
+        endpoint: 'projects/1/repository/tree',
+        statusCode: 404,
+        retryable: false,
+      });
+      mockGitlabClient.findDependencyFiles.mockRejectedValue(apiError);
+
+      const result = await fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, false);
+
+      expect(result).toEqual([]);
+      expect(console.warn).toHaveBeenCalledWith('Repository tree not found for project ID 1; proceeding without dependency files.');
+    });
   });
 
   describe('getGitlabClient', () => {
@@ -96,6 +131,44 @@ describe('gitlabHelpers', () => {
       expect(NewClientConfig).toHaveBeenCalled();
       expect(NewGitlabClient).toHaveBeenCalledWith('https://gitlab.example.com', 'test-token');
       expect(client).toBe('client-instance');
+    });
+
+    it('passes HTTP resilience options from environment variables', async () => {
+      (NewClientConfig as jest.Mock).mockReturnValue({
+        Url: 'https://gitlab.example.com',
+        Token: 'test-token',
+      });
+      (NewGitlabClient as unknown as jest.Mock).mockReturnValue('client-instance');
+
+      process.env.GITLAB_HTTP_TIMEOUT_MS = '15000';
+      process.env.GITLAB_HTTP_MAX_RETRIES = '3';
+      process.env.GITLAB_HTTP_RETRY_DELAY_MS = '250';
+
+      const client = await getGitlabClient();
+
+      expect(NewGitlabClient).toHaveBeenCalledWith('https://gitlab.example.com', 'test-token', {
+        timeoutMs: 15000,
+        maxRetries: 3,
+        retryDelayMs: 250,
+      });
+      expect(client).toBe('client-instance');
+
+      delete process.env.GITLAB_HTTP_TIMEOUT_MS;
+      delete process.env.GITLAB_HTTP_MAX_RETRIES;
+      delete process.env.GITLAB_HTTP_RETRY_DELAY_MS;
+    });
+
+    it('throws when HTTP configuration values are invalid', async () => {
+      (NewClientConfig as jest.Mock).mockReturnValue({
+        Url: 'https://gitlab.example.com',
+        Token: 'test-token',
+      });
+
+      process.env.GITLAB_HTTP_TIMEOUT_MS = 'invalid';
+
+      await expect(getGitlabClient()).rejects.toThrow('GITLAB_HTTP_TIMEOUT_MS must be a valid integer');
+
+      delete process.env.GITLAB_HTTP_TIMEOUT_MS;
     });
   });
 });

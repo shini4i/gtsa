@@ -1,5 +1,6 @@
 import { FileProcessor } from './fileProcessor';
 import { GitlabClient } from '../gitlab/gitlabClient';
+import { formatError } from '../utils/errorFormatter';
 
 interface PackageLock {
   dependencies: Record<string, Dependency>;
@@ -61,7 +62,7 @@ export class NpmProcessor implements FileProcessor {
         projectIds.add(project.path_with_namespace);
       }
     } catch (error) {
-      console.error(`Error fetching project ${projectId}:`, error);
+      console.error(`Error fetching project ${projectId}: ${formatError(error)}`);
     }
   }
 

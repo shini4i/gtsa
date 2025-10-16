@@ -1,5 +1,6 @@
 import MockAdapter from 'axios-mock-adapter';
-import axios from 'axios';
+import axios, { AxiosInstance } from 'axios';
+import { GitlabApiError } from './errors';
 import { NewGitlabClient } from './gitlabClient';
 import { ProgressReporter } from '../utils/progressReporter';
 
@@ -34,6 +35,7 @@ const expectProgressFor = (label: string, index = 0): ProgressReporterInstance =
 };
 
 let mock: MockAdapter;
+let httpClient: AxiosInstance;
 
 beforeAll(() => {
   jest.spyOn(console, 'error').mockImplementation(() => {
@@ -42,7 +44,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   getProgressMock().mockClear();
-  mock = new MockAdapter(axios);
+  httpClient = axios.create();
+  mock = new MockAdapter(httpClient);
 });
 
 afterEach(() => {
@@ -50,7 +53,7 @@ afterEach(() => {
 });
 
 test('getProject makes a GET request and returns data', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const projectId = '1';
 
   // simulate a successful server response
@@ -63,7 +66,7 @@ test('getProject makes a GET request and returns data', async () => {
 });
 
 test('getAllProjects fetches every page of projects', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
 
   const page1Projects = [{ id: 1 }, { id: 2 }];
   const page2Projects = [{ id: 3 }];
@@ -90,7 +93,7 @@ test('getAllProjects fetches every page of projects', async () => {
 });
 
 test('getAllProjects stops iteration when API returns an empty page', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
 
   mock.onGet('https://gitlab.example.com/api/v4/projects').replyOnce((config) => {
     expect(config.params).toEqual({ page: 1, per_page: 100 });
@@ -109,7 +112,7 @@ test('getAllProjects stops iteration when API returns an empty page', async () =
 });
 
 test('getFileContent makes a GET request and returns data', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
 
   // simulate a successful server response
   const fileContent = 'SGVsbG8sIHdvcmxkIQ=='; // Hello, world! encoded in Base64
@@ -126,7 +129,10 @@ test('getFileContent makes a GET request and returns data', async () => {
   const encodedFilePath = encodeURIComponent(filePath);
 
   mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}/repository/files/${encodedFilePath}`)
-    .reply(200, fileData);
+    .reply((config) => {
+      expect(config.params).toEqual({ ref: branch });
+      return [200, fileData];
+    });
 
   const content = await client.getFileContent(projectId, filePath, branch);
 
@@ -134,7 +140,7 @@ test('getFileContent makes a GET request and returns data', async () => {
 });
 
 test('findDependencyFiles returns an empty array when no dependency files are found', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const projectId = '1';
   const branch = 'master';
 
@@ -149,7 +155,7 @@ test('findDependencyFiles returns an empty array when no dependency files are fo
 });
 
 test('findDependencyFiles makes a GET request and returns dependency files', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const projectId = '1';
   const branch = 'master';
 
@@ -164,7 +170,7 @@ test('findDependencyFiles makes a GET request and returns dependency files', asy
 });
 
 test('getProjectId makes a GET request and returns data', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const path_with_namespace = 'mygroup/myproject';
 
   const projectData = { id: 1, name: 'My Project' };
@@ -177,7 +183,7 @@ test('getProjectId makes a GET request and returns data', async () => {
 });
 
 test('allowCiJobTokenAccess makes a POST request to the correct endpoint', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const sourceProjectId = '1';
   const targetProjectId = '2';
 
@@ -199,8 +205,36 @@ test('allowCiJobTokenAccess makes a POST request to the correct endpoint', async
   }
 });
 
+test('executeRequest retries retryable errors and exposes GitlabApiError metadata', async () => {
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', {
+    httpClient,
+    maxRetries: 1,
+    retryDelayMs: 1,
+  });
+
+  mock.onGet('https://gitlab.example.com/api/v4/projects/1').replyOnce(503, 'Service Unavailable');
+  mock.onGet('https://gitlab.example.com/api/v4/projects/1').replyOnce(503, 'Service Unavailable');
+
+  let thrownError: unknown;
+  try {
+    await client.getProject('1');
+  } catch (error) {
+    thrownError = error;
+  }
+
+  expect(thrownError).toBeDefined();
+  expect(thrownError).toBeInstanceOf(GitlabApiError);
+  expect(thrownError).toMatchObject({
+    statusCode: 503,
+    retryable: true,
+    endpoint: 'https://gitlab.example.com/api/v4/projects/1',
+  });
+
+  expect(mock.history.get).toHaveLength(2);
+});
+
 test('isProjectWhitelisted returns true if the project is in the job token scope allowlist', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const sourceProjectId = 1; // Using a project ID that exists in the allowlist
   const depProjectId = 2; // The ID of the other project is arbitrary in this case, since we are mocking the response
 
@@ -214,7 +248,7 @@ test('isProjectWhitelisted returns true if the project is in the job token scope
 });
 
 test('isProjectWhitelisted returns false if the project is not in the job token scope allowlist', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const sourceProjectId = 2; // Using a project ID that does not exist in the allowlist
   const depProjectId = 3; // The ID of the other project is arbitrary in this case, since we are mocking the response
 
@@ -228,7 +262,7 @@ test('isProjectWhitelisted returns false if the project is not in the job token 
 });
 
 test('getProject logs error and rethrows on failure', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const projectId = '1';
 
   mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}`).reply(500);
@@ -237,7 +271,7 @@ test('getProject logs error and rethrows on failure', async () => {
 });
 
 test('isProjectWhitelisted logs error and rethrows on failure', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const sourceProjectId = 1;
   const depProjectId = 2;
 
@@ -247,7 +281,7 @@ test('isProjectWhitelisted logs error and rethrows on failure', async () => {
 });
 
 test('getFileContent throws error on unexpected encoding', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const projectId = 1;
   const filePath = 'test.txt';
   const branch = 'master';
@@ -267,7 +301,7 @@ test('getFileContent throws error on unexpected encoding', async () => {
 });
 
 test('findDependencyFiles makes a GET request and returns dependency files across paginated responses', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const projectId = '1';
   const branch = 'master';
 
@@ -306,7 +340,7 @@ test('findDependencyFiles makes a GET request and returns dependency files acros
 });
 
 test('findDependencyFiles returns paths when monorepo flag is true', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const projectId = '1';
   const branch = 'master';
 
@@ -320,6 +354,6 @@ test('findDependencyFiles returns paths when monorepo flag is true', async () =>
 });
 
 test('gitlab client should return the correct url', async () => {
-  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken');
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   expect(client.Url).toEqual('https://gitlab.example.com');
 });

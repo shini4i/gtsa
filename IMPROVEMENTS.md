@@ -12,9 +12,9 @@ This checklist captures agreed-upon enhancements for `@shini4i/gitlab-token-scop
 - [x] Document the new module boundaries (short ADR or architecture note).
 
 ## Error Handling & Resilience
-- [ ] Implement typed error objects for GitLab/API failures with consistent messages and status codes.
-- [ ] Ensure callers either handle or propagate errors explicitly instead of logging and continuing silently.
-- [ ] Add retry and timeout configuration for outbound HTTP calls.
+- [x] Implement typed error objects for GitLab/API failures with consistent messages and status codes.
+- [x] Ensure callers either handle or propagate errors explicitly instead of logging and continuing silently.
+- [x] Add retry and timeout configuration for outbound HTTP calls.
 
 ## Performance & Resource Use
 - [ ] Implement concurrency control and memoization in dependency processing to reduce duplicate GitLab lookups.

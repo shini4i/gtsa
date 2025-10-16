@@ -1,5 +1,11 @@
 import { GitlabClient } from '../gitlab/gitlabClient';
-import { processAllDependencyFiles, processDependencies, processDependencyFile } from './dependencyProcessor';
+import {
+  DependencyFileProcessingError,
+  DependencyProcessingError,
+  processAllDependencyFiles,
+  processDependencies,
+  processDependencyFile,
+} from './dependencyProcessor';
 import { createFileProcessor } from '../processor/fileProcessor';
 
 beforeAll(() => {
@@ -46,11 +52,11 @@ describe('dependencyProcessor', () => {
       expect(result).toEqual([]);
     });
 
-    it('should log an error and rethrow if an error occurs', async () => {
+    it('wraps errors in DependencyFileProcessingError', async () => {
       const error = new Error('Failed to get file content');
       gitlabClient.getFileContent.mockRejectedValue(error);
 
-      await expect(processDependencyFile(gitlabClient, 1, 'main', 'file.txt')).rejects.toThrow(error);
+      await expect(processDependencyFile(gitlabClient, 1, 'main', 'file.txt')).rejects.toBeInstanceOf(DependencyFileProcessingError);
     });
   });
 
@@ -81,6 +87,17 @@ describe('dependencyProcessor', () => {
       expect(gitlabClient.isProjectWhitelisted).toHaveBeenCalledWith(1, '2');
       expect(gitlabClient.allowCiJobTokenAccess).not.toHaveBeenCalled();
     });
+
+    it('throws a DependencyProcessingError when dependency updates fail', async () => {
+      const dependencies = ['dependency1', 'dependency2'];
+      gitlabClient.getProjectId
+        .mockResolvedValueOnce('2')
+        .mockRejectedValueOnce(new Error('lookup failed'));
+      gitlabClient.isProjectWhitelisted.mockResolvedValue(false);
+      gitlabClient.allowCiJobTokenAccess.mockResolvedValue(undefined);
+
+      await expect(processDependencies(gitlabClient, dependencies, 1)).rejects.toBeInstanceOf(DependencyProcessingError);
+    });
   });
 
   describe('processAllDependencyFiles', () => {
@@ -97,7 +114,7 @@ describe('dependencyProcessor', () => {
       expect(gitlabClient.getFileContent).toHaveBeenCalledTimes(2);
     });
 
-    it('continues processing when a file fails', async () => {
+    it('aggregates errors when a file fails', async () => {
       (createFileProcessor as jest.Mock).mockReset();
       const error = new Error('boom');
       gitlabClient.getFileContent
@@ -107,24 +124,8 @@ describe('dependencyProcessor', () => {
         extractDependencies: jest.fn().mockResolvedValue(['dep1']),
       });
 
-      const result = await processAllDependencyFiles(gitlabClient, 1, 'main', ['file1', 'file2']);
-
-      expect(result).toEqual(['dep1']);
-      expect(console.error).toHaveBeenCalledWith('Error processing file file2:', error);
+      await expect(processAllDependencyFiles(gitlabClient, 1, 'main', ['file1', 'file2'])).rejects.toBeInstanceOf(DependencyProcessingError);
       expect(gitlabClient.getFileContent).toHaveBeenCalledTimes(2);
     });
-  });
-
-  it('logs a failure when dependency processing throws for a project', async () => {
-    const dependencies = ['dependency1', 'dependency2'];
-    gitlabClient.getProjectId
-      .mockResolvedValueOnce('2')
-      .mockRejectedValueOnce(new Error('lookup failed'));
-    gitlabClient.isProjectWhitelisted.mockResolvedValue(false);
-    gitlabClient.allowCiJobTokenAccess.mockResolvedValue(undefined);
-
-    await processDependencies(gitlabClient, dependencies, 1);
-
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Failed to grant token scope from project dependency2 to source project: Error: lookup failed'));
   });
 });

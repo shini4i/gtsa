@@ -1,4 +1,4 @@
-import { TokenScopeAdjuster } from './tokenScopeAdjuster';
+import { AdjustAllProjectsError, TokenScopeAdjuster } from './tokenScopeAdjuster';
 import { DependencyScanner } from './dependencyScanner';
 import { DryRunReporter } from './reportingService';
 import { processDependencies } from '../utils/dependencyProcessor';
@@ -140,14 +140,14 @@ describe('TokenScopeAdjuster', () => {
       expect(entries).toEqual([expectedEntry]);
     });
 
-    test('logs errors from project adjustments and continues processing', async () => {
+    test('logs errors from project adjustments and throws aggregated error', async () => {
       gitlabClientMock.getAllProjects.mockResolvedValue([{ id: 1 }]);
       const expectedError = new Error('boom');
       jest.spyOn(adjuster, 'adjustProject').mockRejectedValue(expectedError);
 
-      await adjuster.adjustAllProjects({ dryRun: false, monorepo: false });
+      await expect(adjuster.adjustAllProjects({ dryRun: false, monorepo: false })).rejects.toBeInstanceOf(AdjustAllProjectsError);
 
-      expect(errorSpy).toHaveBeenCalledWith('Failed to adjust token scope for project ID 1:', expectedError);
+      expect(errorSpy).toHaveBeenCalledWith('Failed to adjust token scope for project ID 1: boom');
     });
   });
 });

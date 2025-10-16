@@ -1,6 +1,37 @@
 import { GitlabClient } from '../gitlab/gitlabClient';
 import { createFileProcessor } from '../processor/fileProcessor';
 
+export class DependencyFileProcessingError extends Error {
+  readonly projectId: number;
+  readonly file: string;
+  readonly cause: unknown;
+
+  constructor(projectId: number, file: string, cause: unknown) {
+    super(`Failed to process dependency file ${file} for project ID ${projectId}`);
+    this.name = 'DependencyFileProcessingError';
+    this.projectId = projectId;
+    this.file = file;
+    this.cause = cause;
+  }
+}
+
+export interface DependencyFailure {
+  dependency: string;
+  cause: unknown;
+}
+
+export class DependencyProcessingError extends Error {
+  readonly sourceProjectId: number;
+  readonly failures: DependencyFailure[];
+
+  constructor(sourceProjectId: number, failures: DependencyFailure[], message?: string) {
+    super(message ?? `Failed to process ${failures.length} dependencies for project ID ${sourceProjectId}`);
+    this.name = 'DependencyProcessingError';
+    this.sourceProjectId = sourceProjectId;
+    this.failures = failures;
+  }
+}
+
 /**
  * Processes a single dependency file and returns the extracted dependencies.
  *
@@ -24,8 +55,7 @@ export async function processDependencyFile(gitlabClient: GitlabClient, projectI
     console.log(`Dependencies from \x1b[36m${file}\x1b[0m that match the GitLab URL: `, dependencies);
     return dependencies;
   } catch (error) {
-    console.error(`Failed to process dependency file ${file} for project ID ${projectId}:`, error);
-    throw error;
+    throw new DependencyFileProcessingError(projectId, file, error);
   }
 }
 
@@ -40,14 +70,29 @@ export async function processDependencyFile(gitlabClient: GitlabClient, projectI
  */
 export async function processAllDependencyFiles(gitlabClient: GitlabClient, projectId: number, defaultBranch: string, dependencyFiles: string[]): Promise<string[]> {
   const allDependencies: string[] = [];
+  const fileErrors: DependencyFileProcessingError[] = [];
 
   for (const file of dependencyFiles) {
     try {
       const dependencies = await processDependencyFile(gitlabClient, projectId, defaultBranch, file);
       allDependencies.push(...dependencies);
     } catch (error) {
-      console.error(`Error processing file ${file}:`, error);
+      if (error instanceof DependencyFileProcessingError) {
+        fileErrors.push(error);
+      } else {
+        fileErrors.push(new DependencyFileProcessingError(projectId, file, error));
+      }
     }
+  }
+
+  if (fileErrors.length > 0) {
+    const summary = fileErrors
+      .map(err => `${err.file}: ${(err.cause instanceof Error && err.cause.message) ? err.cause.message : 'Unknown error'}`)
+      .join('; ');
+    throw new DependencyProcessingError(projectId, fileErrors.map(err => ({
+      dependency: err.file,
+      cause: err.cause,
+    })), `Encountered ${fileErrors.length} error(s) while processing dependency files for project ID ${projectId}: ${summary}`);
   }
 
   return allDependencies;
@@ -62,7 +107,9 @@ export async function processAllDependencyFiles(gitlabClient: GitlabClient, proj
  * @returns A promise that resolves when all tasks are completed.
  */
 export async function processDependencies(gitlabClient: GitlabClient, dependencies: string[], sourceProjectId: number) {
-  const tasks = dependencies.map(async (dependency: string) => {
+  const failures: DependencyFailure[] = [];
+
+  for (const dependency of dependencies) {
     try {
       const dependencyProjectId = await gitlabClient.getProjectId(dependency);
       if (!await gitlabClient.isProjectWhitelisted(sourceProjectId, dependencyProjectId)) {
@@ -71,9 +118,19 @@ export async function processDependencies(gitlabClient: GitlabClient, dependenci
       } else {
         console.log(`===> Project is already whitelisted in ${dependency}, skipping...`);
       }
-    } catch (err) {
-      console.log(`Failed to grant token scope from project ${dependency} to source project: ${err}`);
+    } catch (error) {
+      failures.push({ dependency, cause: error });
     }
-  });
-  await Promise.all(tasks);
+  }
+
+  if (failures.length > 0) {
+    const summary = failures
+      .map(failure => `${failure.dependency}: ${(failure.cause instanceof Error && failure.cause.message) ? failure.cause.message : 'Unknown error'}`)
+      .join('; ');
+    throw new DependencyProcessingError(
+      sourceProjectId,
+      failures,
+      `Failed to process ${failures.length} dependenc${failures.length === 1 ? 'y' : 'ies'} for project ID ${sourceProjectId}: ${summary}`,
+    );
+  }
 }
