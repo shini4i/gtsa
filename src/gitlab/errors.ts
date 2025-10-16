@@ -1,5 +1,15 @@
 import { AxiosError, Method, isAxiosError } from 'axios';
 
+/**
+ * Describes the HTTP request context captured when wrapping a GitLab API failure.
+ *
+ * @property method - HTTP verb used for the failing request.
+ * @property endpoint - Fully qualified API endpoint.
+ * @property statusCode - Response status code when available.
+ * @property retryable - Indicates whether the error should trigger a retry.
+ * @property responseBody - Raw response payload for debugging.
+ * @property originalError - Underlying error thrown by axios or other layers.
+ */
 export interface GitlabApiErrorOptions {
   method: Method;
   endpoint: string;
@@ -9,6 +19,9 @@ export interface GitlabApiErrorOptions {
   originalError?: unknown;
 }
 
+/**
+ * Rich error type that annotates GitLab API failures with request metadata and retry hints.
+ */
 export class GitlabApiError extends Error {
   readonly statusCode?: number;
   readonly method: Method;
@@ -35,6 +48,14 @@ export class GitlabApiError extends Error {
     }
   }
 
+  /**
+   * Normalises any thrown value into a {@link GitlabApiError}, preserving retry semantics when possible.
+   *
+   * @param error - The original thrown value.
+   * @param method - HTTP verb used for the request.
+   * @param endpoint - Fully qualified endpoint that was invoked.
+   * @returns A {@link GitlabApiError} capturing relevant request metadata.
+   */
   static fromUnknown(error: unknown, method: Method, endpoint: string): GitlabApiError {
     if (isAxiosError(error)) {
       return GitlabApiError.fromAxiosError(error, method, endpoint);

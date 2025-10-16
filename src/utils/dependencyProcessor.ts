@@ -1,6 +1,13 @@
 import { GitlabClient } from '../gitlab/gitlabClient';
 import { createFileProcessor } from '../processor/fileProcessor';
 
+/**
+ * Error thrown when a dependency manifest cannot be processed for a project.
+ *
+ * @property projectId - Project whose manifest failed to parse.
+ * @property file - Path of the dependency file that failed.
+ * @property cause - Underlying error thrown during processing.
+ */
 export class DependencyFileProcessingError extends Error {
   readonly projectId: number;
   readonly file: string;
@@ -15,11 +22,23 @@ export class DependencyFileProcessingError extends Error {
   }
 }
 
+/**
+ * Captures the dependency identifier and underlying cause when processing fails.
+ *
+ * @property dependency - Dependency project path that could not be processed.
+ * @property cause - Root cause error or thrown value.
+ */
 export interface DependencyFailure {
   dependency: string;
   cause: unknown;
 }
 
+/**
+ * Aggregated error representing one or more dependency processing failures for a project.
+ *
+ * @property sourceProjectId - Project whose dependencies failed to adjust.
+ * @property failures - Collection of individual dependency failures.
+ */
 export class DependencyProcessingError extends Error {
   readonly sourceProjectId: number;
   readonly failures: DependencyFailure[];
@@ -40,6 +59,7 @@ export class DependencyProcessingError extends Error {
  * @param defaultBranch - The default branch of the project.
  * @param file - The path to the dependency file.
  * @returns A promise that resolves to an array of extracted dependencies.
+ * @throws DependencyFileProcessingError when the file cannot be processed.
  */
 export async function processDependencyFile(gitlabClient: GitlabClient, projectId: number, defaultBranch: string, file: string): Promise<string[]> {
   try {
@@ -67,6 +87,7 @@ export async function processDependencyFile(gitlabClient: GitlabClient, projectI
  * @param defaultBranch - The default branch of the project.
  * @param dependencyFiles - An array of paths to the dependency files.
  * @returns A promise that resolves to an array of aggregated dependencies.
+ * @throws DependencyProcessingError when any dependency file fails.
  */
 export async function processAllDependencyFiles(gitlabClient: GitlabClient, projectId: number, defaultBranch: string, dependencyFiles: string[]): Promise<string[]> {
   const allDependencies: string[] = [];
@@ -105,6 +126,7 @@ export async function processAllDependencyFiles(gitlabClient: GitlabClient, proj
  * @param dependencies - An array of dependency project names.
  * @param sourceProjectId - The ID of the source project.
  * @returns A promise that resolves when all tasks are completed.
+ * @throws DependencyProcessingError when any dependency project fails to update.
  */
 export async function processDependencies(gitlabClient: GitlabClient, dependencies: string[], sourceProjectId: number) {
   const failures: DependencyFailure[] = [];

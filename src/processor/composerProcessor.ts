@@ -1,12 +1,28 @@
 import { FileProcessor } from './fileProcessor';
 import { formatError } from '../utils/errorFormatter';
 
+/**
+ * Shape of Composer repository entries relevant for dependency extraction.
+ *
+ * @property type - Repository type as defined in Composer metadata.
+ * @property url - Repository target URL.
+ */
 interface Repository {
   type: string;
   url: string;
 }
 
+/**
+ * Extracts GitLab-hosted repositories referenced within `composer.json` manifests.
+ */
 export class ComposerProcessor implements FileProcessor {
+  /**
+   * Parses a Composer manifest and captures dependency repository paths hosted on GitLab.
+   *
+   * @param fileContent - Raw JSON text from `composer.json`.
+   * @param gitlabUrl - Base GitLab URL used to strip hostnames from repository URLs.
+   * @returns Promise resolving to a list of dependency `path_with_namespace` strings.
+  */
   extractDependencies(fileContent: string, gitlabUrl: string): Promise<string[]> {
     const dependencies: string[] = [];
     const strippedUrl = gitlabUrl.replace('https://', '');

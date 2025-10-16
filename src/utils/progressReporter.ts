@@ -3,6 +3,12 @@ const FILLED_SEGMENT = '#';
 const EMPTY_SEGMENT = '-';
 const SPINNER_FRAMES = ['|', '/', '-', '\\'];
 
+/**
+ * Guards whether a numeric value is a finite positive integer.
+ *
+ * @param value - Candidate value to test.
+ * @returns True when the provided value is a positive integer.
+ */
 function isPositiveInteger(value: number | undefined | null): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
@@ -11,6 +17,9 @@ function isPositiveInteger(value: number | undefined | null): value is number {
  * Lightweight CLI progress helper that draws either a progress bar (when the total is known)
  * or a spinner (when paging count is unknown). Falls back to plain console logging when TTY
  * rendering is not available (for example, in CI logs).
+ */
+/**
+ * Renders progress for long-running GitLab API operations, adapting output for TTY and non-TTY environments.
  */
 export class ProgressReporter {
   private total?: number;

@@ -2,10 +2,24 @@ import { FileProcessor } from './fileProcessor';
 import { GitlabClient } from '../gitlab/gitlabClient';
 import { formatError } from '../utils/errorFormatter';
 
+/**
+ * Minimal subset of fields parsed from an npm `package-lock.json` file.
+ *
+ * @property dependencies - Top-level dependency map keyed by package name.
+ */
 interface PackageLock {
   dependencies: Record<string, Dependency>;
 }
 
+/**
+ * Tree node describing a single dependency entry within a lockfile.
+ *
+ * @property version - Resolved semantic version for the dependency.
+ * @property resolved - Full URL where the package tarball was downloaded.
+ * @property integrity - Integrity hash as recorded in the lockfile.
+ * @property peer - Indicates whether the dependency is a peer dependency.
+ * @property dependencies - Nested dependencies for this node.
+ */
 interface Dependency {
   version: string;
   resolved: string;
@@ -14,13 +28,26 @@ interface Dependency {
   dependencies?: Record<string, Dependency>;
 }
 
+/**
+ * Processes npm `package-lock.json` files to discover GitLab package dependencies.
+ */
 export class NpmProcessor implements FileProcessor {
   private gitlabClient: GitlabClient;
 
+  /**
+   * @param gitlabClient - GitLab client used to resolve dependency project details.
+   */
   constructor(gitlabClient: GitlabClient) {
     this.gitlabClient = gitlabClient;
   }
 
+  /**
+   * Parses an npm lockfile looking for dependency entries resolved from the GitLab instance.
+   *
+   * @param fileContent - Raw JSON contents of `package-lock.json`.
+   * @param gitlabUrl - Base GitLab URL used to normalise project identifiers.
+   * @returns Promise resolving to a de-duplicated list of dependency project paths.
+   */
   async extractDependencies(fileContent: string, gitlabUrl: string): Promise<string[]> {
     const packageLock: PackageLock = JSON.parse(fileContent);
     const projectIds = new Set<string>();
@@ -74,6 +101,12 @@ export class NpmProcessor implements FileProcessor {
   }
 }
 
-export function escapeRegExp(string: string): string {
-  return string.replace(/[.*+\-?^${}()|[\]\\]/g, '\\$&');
+/**
+ * Escapes a string for safe inclusion within a regular expression literal.
+ *
+ * @param value - The raw string value to escape.
+ * @returns A regex-safe version of the input string.
+ */
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+\-?^${}()|[\]\\]/g, '\\$&');
 }

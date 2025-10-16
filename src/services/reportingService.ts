@@ -1,12 +1,23 @@
 import { ProjectReportEntry, writeYamlReport } from '../report/reportGenerator';
 import { formatError } from '../utils/errorFormatter';
 
+/**
+ * Persists dry-run results to disk as YAML while providing console feedback.
+ */
 export class DryRunReporter {
   private readonly entries: ProjectReportEntry[] = [];
   private ready = false;
 
+  /**
+   * @param reportPath - Destination file written on every update.
+   */
   constructor(private readonly reportPath: string) {}
 
+/**
+ * Creates or truncates the report file and marks the reporter ready for incremental updates.
+ *
+ * @returns Promise that resolves once the report file is initialised.
+ */
   async initialize(): Promise<void> {
     try {
       await writeYamlReport([], this.reportPath);
@@ -17,6 +28,12 @@ export class DryRunReporter {
     }
   }
 
+/**
+ * Appends a new project entry to the in-memory collection and rewrites the report when ready.
+ *
+ * @param entry - Dry-run result describing dependency adjustments for a project.
+ * @returns Promise that resolves after the entry is appended (and persisted when possible).
+ */
   async append(entry: ProjectReportEntry): Promise<void> {
     this.entries.push(entry);
 
@@ -33,6 +50,11 @@ export class DryRunReporter {
     }
   }
 
+/**
+ * Emits a final log message indicating whether a report is available.
+ *
+ * @returns void.
+ */
   finalize(): void {
     if (!this.ready) {
       console.warn(`Dry run report could not be generated at ${this.reportPath} due to earlier errors.`);
