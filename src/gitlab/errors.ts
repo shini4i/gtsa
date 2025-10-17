@@ -21,6 +21,8 @@ export interface GitlabApiErrorOptions {
 
 /**
  * Rich error type that annotates GitLab API failures with request metadata and retry hints.
+ *
+ * @property cause - When available, references the original thrown error.
  */
 export class GitlabApiError extends Error {
   readonly statusCode?: number;
@@ -28,6 +30,7 @@ export class GitlabApiError extends Error {
   readonly endpoint: string;
   readonly retryable: boolean;
   readonly responseBody?: unknown;
+  readonly cause?: unknown;
 
   constructor(message: string, options: GitlabApiErrorOptions) {
     super(message);

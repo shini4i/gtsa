@@ -134,6 +134,26 @@ describe('gitlabHelpers', () => {
         'warn',
       );
     });
+
+    it('updates progress and emits consumer progress events', async () => {
+      const projectId = 7;
+      const defaultBranch = 'main';
+      const onProgress = jest.fn();
+
+      mockGitlabClient.findDependencyFiles.mockImplementation(async (_project, _branch, _monorepo, progressCallback) => {
+        progressCallback?.(1, 0);
+        progressCallback?.(2, 4);
+        return ['package.json'];
+      });
+
+      const result = await fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, true, logger, onProgress);
+
+      expect(result).toEqual(['package.json']);
+      expect(logger.updateProjectProgress).toHaveBeenNthCalledWith(1, projectId, 1, undefined, 'Fetching repository tree');
+      expect(logger.updateProjectProgress).toHaveBeenNthCalledWith(2, projectId, 2, 4, 'Fetching repository tree');
+      expect(onProgress).toHaveBeenCalledWith(1, 0);
+      expect(onProgress).toHaveBeenCalledWith(2, 4);
+    });
   });
 
   describe('getGitlabClient', () => {
@@ -187,6 +207,19 @@ describe('gitlabHelpers', () => {
       await expect(getGitlabClient()).rejects.toThrow('GITLAB_HTTP_TIMEOUT_MS must be a valid integer');
 
       delete process.env.GITLAB_HTTP_TIMEOUT_MS;
+    });
+
+    it('enforces minimum values for HTTP configuration overrides', async () => {
+      (NewClientConfig as jest.Mock).mockReturnValue({
+        Url: 'https://gitlab.example.com',
+        Token: 'test-token',
+      });
+
+      process.env.GITLAB_HTTP_MAX_RETRIES = '-1';
+
+      await expect(getGitlabClient()).rejects.toThrow('GITLAB_HTTP_MAX_RETRIES must be greater than or equal to 0, but received -1');
+
+      delete process.env.GITLAB_HTTP_MAX_RETRIES;
     });
   });
 });

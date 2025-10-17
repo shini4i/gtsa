@@ -12,15 +12,6 @@ export function setDebugLogging(enabled: boolean): void {
 }
 
 /**
- * Indicates whether debug logging is currently enabled.
- *
- * @returns `true` when stack traces should be emitted.
- */
-export function isDebugLoggingEnabled(): boolean {
-  return debugLoggingEnabled;
-}
-
-/**
  * Converts unknown error values into human-readable strings aligned with CLI output expectations.
  *
  * @param error - The thrown value to format.

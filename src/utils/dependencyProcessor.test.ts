@@ -131,5 +131,6 @@ describe('dependencyProcessor', () => {
       await expect(processAllDependencyFiles(gitlabClient, 1, 'main', ['file1', 'file2'], logger)).rejects.toBeInstanceOf(DependencyProcessingError);
       expect(gitlabClient.getFileContent).toHaveBeenCalledTimes(2);
     });
+
   });
 });

@@ -118,11 +118,11 @@ export async function processAllDependencyFiles(
       const dependencies = await processDependencyFile(gitlabClient, projectId, defaultBranch, file, logger);
       allDependencies.push(...dependencies);
     } catch (error) {
-      if (error instanceof DependencyFileProcessingError) {
-        fileErrors.push(error);
-      } else {
-        fileErrors.push(new DependencyFileProcessingError(projectId, file, error));
-      }
+      const normalizedError =
+        error instanceof DependencyFileProcessingError
+          ? error
+          : new DependencyFileProcessingError(projectId, file, error);
+      fileErrors.push(normalizedError);
     }
   }
 

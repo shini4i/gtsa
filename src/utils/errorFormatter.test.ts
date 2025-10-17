@@ -32,4 +32,11 @@ describe('formatError', () => {
   it('returns string input as-is', () => {
     expect(formatError('plain error')).toBe('plain error');
   });
+
+  it('stringifies objects safely even when JSON serialization fails', () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(formatError(circular)).toBe('[object Object]');
+  });
 });

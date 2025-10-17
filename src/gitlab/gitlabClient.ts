@@ -113,6 +113,7 @@ export class GitlabClient {
       }
     }
 
+    /* istanbul ignore next -- safety net to satisfy exhaustive typing */
     throw new GitlabApiError('GitLab API request exhausted retry attempts.', {
       method,
       endpoint: fullEndpoint,
