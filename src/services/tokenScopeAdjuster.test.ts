@@ -114,11 +114,11 @@ describe('TokenScopeAdjuster', () => {
     test('warns when no projects are returned', async () => {
       gitlabClientMock.getAllProjects.mockResolvedValue([]);
 
-    const entries = await adjuster.adjustAllProjects({ dryRun: false, monorepo: false });
+      const entries = await adjuster.adjustAllProjects({ dryRun: false, monorepo: false });
 
-    expect(entries).toEqual([]);
-    expect(logger.warn).toHaveBeenCalledWith('No projects available to process.');
-    expect(logger.clearGlobalProgress).toHaveBeenCalled();
+      expect(entries).toEqual([]);
+      expect(logger.warn).toHaveBeenCalledWith('No projects available to process.');
+      expect(logger.clearGlobalProgress).toHaveBeenCalled();
     });
 
     test('skips projects without an ID', async () => {
@@ -158,6 +158,16 @@ describe('TokenScopeAdjuster', () => {
       expect(reporter.finalize).toHaveBeenCalled();
       expect(entries).toEqual([expectedEntry]);
       expect(logger.clearGlobalProgress).toHaveBeenCalled();
+    });
+
+    test('passes project query filters to the GitLab client', async () => {
+      const projectQuery = { search: 'runner', perPage: 20, membership: true };
+      gitlabClientMock.getAllProjects.mockResolvedValue([{ id: 1, path_with_namespace: 'group/project-1', default_branch: 'main' }]);
+      jest.spyOn(adjuster, 'adjustProject').mockResolvedValue(null);
+
+      await adjuster.adjustAllProjects({ dryRun: false, monorepo: false, projectQuery });
+
+      expect(gitlabClientMock.getAllProjects).toHaveBeenCalledWith(projectQuery, expect.any(Function));
     });
 
     test('logs errors from project adjustments and throws aggregated error', async () => {

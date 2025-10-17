@@ -17,9 +17,9 @@ This checklist captures agreed-upon enhancements for `@shini4i/gitlab-token-scop
 - [x] Add retry and timeout configuration for outbound HTTP calls.
 
 ## Performance & Resource Use
-- [ ] Implement concurrency control and memoization in dependency processing to reduce duplicate GitLab lookups.
-- [ ] Allow filtering/pagination parameters when fetching all projects to avoid scanning unnecessary entries.
-- [ ] Benchmark large-project scenarios and document performance expectations.
+- [x] Implement concurrency control and memoization in dependency processing to reduce duplicate GitLab lookups.
+- [x] Allow filtering/pagination parameters when fetching all projects to avoid scanning unnecessary entries.
+- [x] Benchmark large-project scenarios and document performance expectations.
 
 ## Developer Experience
 - [x] Wrap Axios usage in an injectable transport layer to simplify testing.

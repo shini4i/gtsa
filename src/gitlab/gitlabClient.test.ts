@@ -77,7 +77,7 @@ test('getAllProjects fetches every page of projects', async () => {
   });
 
   const progressSpy = jest.fn();
-  const projects = await client.getAllProjects(100, progressSpy);
+  const projects = await client.getAllProjects({ perPage: 100 }, progressSpy);
 
   expect(projects).toEqual([...page1Projects, ...page2Projects]);
   expect(progressSpy).toHaveBeenNthCalledWith(1, 1, 2);
@@ -93,11 +93,52 @@ test('getAllProjects stops iteration when API returns an empty page', async () =
   });
 
   const progressSpy = jest.fn();
-  const projects = await client.getAllProjects(100, progressSpy);
+  const projects = await client.getAllProjects({ perPage: 100 }, progressSpy);
 
   expect(projects).toEqual([]);
   expect(mock.history.get).toHaveLength(1);
   expect(progressSpy).not.toHaveBeenCalled();
+});
+
+test('getAllProjects forwards filters and honours page limits', async () => {
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
+
+  mock.onGet('https://gitlab.example.com/api/v4/projects').replyOnce(config => {
+    expect(config.params).toEqual({
+      page: 1,
+      per_page: 50,
+      search: 'runner',
+      membership: true,
+      owned: true,
+      archived: true,
+      simple: true,
+      min_access_level: 30,
+      order_by: 'updated_at',
+      sort: 'desc',
+      visibility: 'internal',
+    });
+
+    return [200, [{ id: 1 }], { 'x-next-page': '2', 'x-total-pages': '5' }];
+  });
+
+  const progressSpy = jest.fn();
+  const projects = await client.getAllProjects({
+    perPage: 50,
+    pageLimit: 1,
+    search: 'runner',
+    membership: true,
+    owned: true,
+    archived: true,
+    simple: true,
+    minAccessLevel: 30,
+    orderBy: 'updated_at',
+    sort: 'desc',
+    visibility: 'internal',
+  }, progressSpy);
+
+  expect(projects).toEqual([{ id: 1 }]);
+  expect(progressSpy).toHaveBeenCalledWith(1, 5);
+  expect(mock.history.get).toHaveLength(1);
 });
 
 test('getFileContent makes a GET request and returns data', async () => {

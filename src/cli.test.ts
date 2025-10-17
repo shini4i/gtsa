@@ -174,7 +174,7 @@ describe('cli entrypoint', () => {
     const { exitError } = await runCli({ all: true, dryRun: true, report: true, monorepo: undefined });
 
     expect(exitError).toBeUndefined();
-    expect(mockedAdjustTokenScopeForAllProjects).toHaveBeenCalledWith(true, false, DEFAULT_REPORT_PATH, loggerInstances[0]);
+    expect(mockedAdjustTokenScopeForAllProjects).toHaveBeenCalledWith(true, false, DEFAULT_REPORT_PATH, loggerInstances[0], undefined);
     expect(loggerInstances[0].info).toHaveBeenCalledWith('Finished adjusting token scope for all projects!');
   });
 
@@ -182,7 +182,7 @@ describe('cli entrypoint', () => {
     const { exitError } = await runCli({ all: true, dryRun: true, report: 'custom.yaml', monorepo: true });
 
     expect(exitError).toBeUndefined();
-    expect(mockedAdjustTokenScopeForAllProjects).toHaveBeenCalledWith(true, true, 'custom.yaml', loggerInstances[0]);
+    expect(mockedAdjustTokenScopeForAllProjects).toHaveBeenCalledWith(true, true, 'custom.yaml', loggerInstances[0], undefined);
   });
 
   it('processes a single project when a valid project id is provided', async () => {
@@ -200,6 +200,55 @@ describe('cli entrypoint', () => {
     expect(exitError?.code).toBe(1);
     expect(loggerInstances[0].error).toHaveBeenCalledWith('Invalid project ID');
     expect(mockedAdjustTokenScope).not.toHaveBeenCalled();
+  });
+
+  it('rejects project filtering flags when --all is not provided', async () => {
+    const { exitError } = await runCli({ projectId: '42', projectsPerPage: '10' });
+
+    expect(exitError).toBeInstanceOf(ExitError);
+    expect(loggerInstances[0].error).toHaveBeenCalledWith('Project filtering flags (--projects-*) require --all.');
+    expect(mockedAdjustTokenScopeForAllProjects).not.toHaveBeenCalled();
+  });
+
+  it('forwards project filtering options when scanning all projects', async () => {
+    const options = {
+      all: true,
+      dryRun: false,
+      projectsPerPage: '20',
+      projectsPageLimit: '2',
+      projectsSearch: 'runner',
+      projectsMembership: true,
+      projectsOwned: true,
+      projectsArchived: true,
+      projectsSimple: true,
+      projectsMinAccessLevel: '30',
+      projectsOrderBy: 'updated_at',
+      projectsSort: 'desc',
+      projectsVisibility: 'internal',
+    };
+
+    const { exitError } = await runCli(options);
+
+    expect(exitError).toBeUndefined();
+    expect(mockedAdjustTokenScopeForAllProjects).toHaveBeenCalledWith(
+      false,
+      false,
+      undefined,
+      loggerInstances[0],
+      {
+        perPage: 20,
+        pageLimit: 2,
+        search: 'runner',
+        membership: true,
+        owned: true,
+        archived: true,
+        simple: true,
+        minAccessLevel: 30,
+        orderBy: 'updated_at',
+        sort: 'desc',
+        visibility: 'internal',
+      },
+    );
   });
 
   it('exits with error when adjustment fails', async () => {

@@ -47,7 +47,7 @@ describe('adjust-token-scope entrypoints', () => {
   });
 
   test('adjustTokenScopeForAllProjects passes reporter when dry-run and report provided', async () => {
-    await adjustTokenScopeForAllProjects(true, true, 'report.yaml', loggerStub);
+    await adjustTokenScopeForAllProjects(true, true, 'report.yaml', loggerStub, undefined);
 
     expect(mockGetGitlabClient).toHaveBeenCalled();
     expect(TokenScopeAdjusterMock).toHaveBeenCalledWith(gitlabClientStub, loggerStub);
@@ -56,17 +56,32 @@ describe('adjust-token-scope entrypoints', () => {
       dryRun: true,
       monorepo: true,
       reporter: reporterInstance,
+      projectQuery: undefined,
     });
   });
 
   test('adjustTokenScopeForAllProjects omits reporter when not in dry-run mode', async () => {
-    await adjustTokenScopeForAllProjects(false, false, 'report.yaml', loggerStub);
+    await adjustTokenScopeForAllProjects(false, false, 'report.yaml', loggerStub, undefined);
 
     expect(DryRunReporterMock).not.toHaveBeenCalled();
     expect(adjusterInstance.adjustAllProjects).toHaveBeenCalledWith({
       dryRun: false,
       monorepo: false,
       reporter: undefined,
+      projectQuery: undefined,
+    });
+  });
+
+  test('adjustTokenScopeForAllProjects forwards project filters to the adjuster', async () => {
+    const projectQuery = { search: 'runner', perPage: 50 };
+
+    await adjustTokenScopeForAllProjects(true, false, undefined, loggerStub, projectQuery);
+
+    expect(adjusterInstance.adjustAllProjects).toHaveBeenCalledWith({
+      dryRun: true,
+      monorepo: false,
+      reporter: undefined,
+      projectQuery,
     });
   });
 });

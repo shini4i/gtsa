@@ -5,6 +5,7 @@ import {
   processAllDependencyFiles,
   processDependencies,
   processDependencyFile,
+  resetDependencyProcessingCaches,
 } from './dependencyProcessor';
 import { createFileProcessor } from '../processor/fileProcessor';
 import LoggerService from '../services/logger';
@@ -23,6 +24,7 @@ describe('dependencyProcessor', () => {
       updateGlobalProgress: jest.fn(),
       clearGlobalProgress: jest.fn(),
     } as unknown as jest.Mocked<LoggerService>;
+    resetDependencyProcessingCaches();
   });
 
   describe('processDependencyFile', () => {
@@ -76,6 +78,34 @@ describe('dependencyProcessor', () => {
       expect(gitlabClient.isProjectWhitelisted).toHaveBeenCalledWith(1, 2);
       expect(gitlabClient.allowCiJobTokenAccess).toHaveBeenCalledWith('2', '1');
       expect(logger.logProject).toHaveBeenCalledWith(1, 'Project was whitelisted in dependency1 successfully');
+    });
+
+    it('deduplicates dependency lookups to avoid repeated GitLab requests', async () => {
+      const dependencies = ['dependency1', 'dependency1'];
+      gitlabClient.getProjectId.mockResolvedValue(2);
+      gitlabClient.isProjectWhitelisted.mockResolvedValue(false);
+      gitlabClient.allowCiJobTokenAccess.mockResolvedValue(undefined);
+
+      await processDependencies(gitlabClient, dependencies, 1, logger);
+
+      expect(gitlabClient.getProjectId).toHaveBeenCalledTimes(1);
+      expect(gitlabClient.allowCiJobTokenAccess).toHaveBeenCalledTimes(1);
+    });
+
+    it('memoizes project lookups across invocations to minimise redundant API calls', async () => {
+      const dependencies = ['dependency1'];
+      gitlabClient.getProjectId.mockResolvedValue(2);
+      gitlabClient.isProjectWhitelisted.mockResolvedValue(false);
+      gitlabClient.allowCiJobTokenAccess.mockResolvedValue(undefined);
+
+      await processDependencies(gitlabClient, dependencies, 1, logger);
+
+      gitlabClient.getProjectId.mockClear();
+      gitlabClient.isProjectWhitelisted.mockResolvedValue(false);
+
+      await processDependencies(gitlabClient, dependencies, 2, logger);
+
+      expect(gitlabClient.getProjectId).not.toHaveBeenCalled();
     });
 
     it('should skip granting access if the project is already whitelisted', async () => {

@@ -5,7 +5,8 @@
   "scripts": {
     "build": "tsc",
     "test": "jest",
-    "coverage": "jest --coverage"
+    "coverage": "jest --coverage",
+    "benchmark": "npm run build --silent && node dist/scripts/benchmarks/dependencyProcessing.js"
   },
   "bin": {
     "gitlab-token-scope-adjuster": "dist/cli.js"

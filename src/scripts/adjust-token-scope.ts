@@ -2,6 +2,7 @@ import { DryRunReporter } from '../services/reportingService';
 import { TokenScopeAdjuster } from '../services/tokenScopeAdjuster';
 import { getGitlabClient } from '../utils/gitlabHelpers';
 import LoggerService from '../services/logger';
+import type { ProjectListOptions } from '../gitlab/gitlabClient';
 
 /**
  * Adjusts CI job token scope for a single project using the configured GitLab credentials.
@@ -32,6 +33,7 @@ export async function adjustTokenScope(
  * @param monorepo - Enables recursive file tree traversal for dependency discovery.
  * @param reportPath - Optional output path for the dry-run YAML report.
  * @param logger - Shared logger instance used for status updates.
+ * @param projectQuery - Optional filters forwarded to the GitLab project listing API.
  * @returns Promise that resolves after processing all accessible projects.
  * @throws AdjustAllProjectsError when at least one project fails to adjust.
  */
@@ -40,9 +42,10 @@ export async function adjustTokenScopeForAllProjects(
   monorepo: boolean,
   reportPath: string | undefined,
   logger: LoggerService,
+  projectQuery: ProjectListOptions | undefined,
 ) {
   const gitlabClient = await getGitlabClient();
   const adjuster = new TokenScopeAdjuster(gitlabClient, logger);
   const reporter = dryRun && reportPath ? new DryRunReporter(reportPath, logger) : undefined;
-  await adjuster.adjustAllProjects({ dryRun, monorepo, reporter });
+  await adjuster.adjustAllProjects({ dryRun, monorepo, reporter, projectQuery });
 }

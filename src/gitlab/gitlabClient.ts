@@ -25,9 +25,65 @@ export interface GitlabClientOptions {
   transport?: HttpTransport;
 }
 
+/**
+ * Optional filters applied when enumerating projects through {@link GitlabClient.getAllProjects}.
+ *
+ * @property perPage - Maximum number of items per page (clamped between 1 and 100).
+ * @property search - Case-insensitive query applied to project name or path.
+ * @property membership - Restrict results to projects the current user or token is a member of.
+ * @property owned - Restrict results to projects owned by the current user or token.
+ * @property archived - Include archived projects when true.
+ * @property simple - Request lighter project payloads without statistics.
+ * @property minAccessLevel - Filter by minimum access level (GitLab enum value).
+ * @property pageLimit - Maximum number of pages to fetch before stopping, useful for partial scans.
+ * @property orderBy - Server-side sort field accepted by GitLab (e.g. `last_activity_at`).
+ * @property sort - Sort direction applied with `orderBy`.
+ * @property visibility - Restrict projects by visibility scope.
+ */
+export interface ProjectListOptions {
+  perPage?: number;
+  search?: string;
+  membership?: boolean;
+  owned?: boolean;
+  archived?: boolean;
+  simple?: boolean;
+  minAccessLevel?: number;
+  pageLimit?: number;
+  orderBy?: 'id' | 'name' | 'path' | 'created_at' | 'updated_at' | 'last_activity_at';
+  sort?: 'asc' | 'desc';
+  visibility?: 'private' | 'internal' | 'public';
+}
+
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 500;
+const MAX_PROJECTS_PER_PAGE = 100;
+
+function resolvePerPage(perPage?: number): number {
+  if (perPage === undefined) {
+    return MAX_PROJECTS_PER_PAGE;
+  }
+
+  const parsed = Math.floor(perPage);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return MAX_PROJECTS_PER_PAGE;
+  }
+
+  return Math.min(MAX_PROJECTS_PER_PAGE, parsed);
+}
+
+function resolvePositiveInteger(value?: number): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const parsed = Math.floor(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+
+  return parsed;
+}
 
 type RequestOverrides = Pick<HttpRequestConfig, 'headers' | 'params'>;
 
@@ -136,12 +192,18 @@ export class GitlabClient {
   }
 
   /**
-   * Iterates through every accessible project, streaming paginated results with a progress indicator.
+   * Iterates through accessible projects, applying optional filters and paging limits while reporting progress.
    *
-   * @param perPage - Page size requested from the GitLab API (default 100).
-   * @returns Promise that resolves to a list of project objects.
+   * @param options - Filters and pagination controls forwarded to the GitLab API.
+   * @param onProgress - Optional callback invoked after each page is fetched.
+   * @returns Promise that resolves to the aggregated list of projects.
    */
-  async getAllProjects(perPage: number = 100, onProgress?: (current: number, total: number) => void): Promise<GitlabProject[]> {
+  async getAllProjects(
+    options: ProjectListOptions = {},
+    onProgress?: (current: number, total: number) => void,
+  ): Promise<GitlabProject[]> {
+    const perPage = resolvePerPage(options.perPage);
+    const pageLimit = resolvePositiveInteger(options.pageLimit);
     const projects: GitlabProject[] = [];
     let page = 1;
     let hasNextPage = true;
@@ -149,11 +211,54 @@ export class GitlabClient {
     let totalPages = 0;
 
     while (hasNextPage) {
+      if (pageLimit && fetchedPages >= pageLimit) {
+        break;
+      }
+
+      const params: Record<string, unknown> = {
+        page,
+        per_page: perPage,
+      };
+
+      if (options.search) {
+        params.search = options.search;
+      }
+
+      if (options.membership !== undefined) {
+        params.membership = options.membership;
+      }
+
+      if (options.owned !== undefined) {
+        params.owned = options.owned;
+      }
+
+      if (options.archived !== undefined) {
+        params.archived = options.archived;
+      }
+
+      if (options.simple !== undefined) {
+        params.simple = options.simple;
+      }
+
+      const minAccessLevel = resolvePositiveInteger(options.minAccessLevel);
+      if (minAccessLevel !== undefined) {
+        params.min_access_level = minAccessLevel;
+      }
+
+      if (options.orderBy) {
+        params.order_by = options.orderBy;
+      }
+
+      if (options.sort) {
+        params.sort = options.sort;
+      }
+
+      if (options.visibility) {
+        params.visibility = options.visibility;
+      }
+
       const response = await this.executeRequest<GitlabProject[]>('get', 'projects', undefined, {
-        params: {
-          page,
-          per_page: perPage,
-        },
+        params,
       });
 
       if (!Array.isArray(response.data) || response.data.length === 0) {

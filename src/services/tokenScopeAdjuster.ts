@@ -1,4 +1,4 @@
-import { GitlabClient } from '../gitlab/gitlabClient';
+import { GitlabClient, ProjectListOptions } from '../gitlab/gitlabClient';
 import { processDependencies } from '../utils/dependencyProcessor';
 import { ProjectReportEntry } from '../report/reportGenerator';
 import { DependencyScanner } from './dependencyScanner';
@@ -21,9 +21,11 @@ export interface AdjustProjectOptions {
  * Extends single-project options with reporter support for dry-run execution across multiple projects.
  *
  * @property reporter - Optional YAML reporter used when `dryRun` is enabled.
+ * @property projectQuery - Filters and pagination options passed to the GitLab project enumeration endpoint.
  */
 export interface AdjustAllProjectsOptions extends AdjustProjectOptions {
   reporter?: DryRunReporter;
+  projectQuery?: ProjectListOptions;
 }
 
 /**
@@ -119,7 +121,7 @@ export class TokenScopeAdjuster {
    * @throws AdjustAllProjectsError when one or more projects fail.
    */
   async adjustAllProjects(options: AdjustAllProjectsOptions): Promise<ProjectReportEntry[]> {
-    const projects = await this.gitlabClient.getAllProjects(100, (current, total) => {
+    const projects = await this.gitlabClient.getAllProjects(options.projectQuery, (current, total) => {
       this.logger.updateGlobalProgress('Fetching projects', current, total > 0 ? total : undefined);
     });
 

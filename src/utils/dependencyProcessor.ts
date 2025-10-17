@@ -2,6 +2,64 @@ import { GitlabClient } from '../gitlab/gitlabClient';
 import { createFileProcessor } from '../processor/fileProcessor';
 import LoggerService from '../services/logger';
 
+const DEFAULT_DEPENDENCY_CONCURRENCY = 5;
+
+const dependencyProjectIdCache = new Map<string, number>();
+const dependencyAllowlistCache = new Map<string, boolean>();
+
+/**
+ * Controls how {@link processDependencies} schedules GitLab lookups and caches intermediate results.
+ *
+ * @property concurrency - Maximum number of dependencies processed in parallel. When omitted, the
+ * value is resolved from `GITLAB_DEPENDENCY_CONCURRENCY` or defaults to five concurrent workers.
+ * @property projectIdCache - Optional cache mapping dependency paths to resolved numeric project IDs.
+ * @property allowlistCache - Optional cache storing allow list checks keyed by `sourceId:dependencyId`.
+ */
+export interface DependencyProcessingOptions {
+  concurrency?: number;
+  projectIdCache?: Map<string, number>;
+  allowlistCache?: Map<string, boolean>;
+}
+
+/**
+ * Clears the shared dependency processing caches. Primarily used in tests to ensure isolated state.
+ */
+export function resetDependencyProcessingCaches(): void {
+  dependencyProjectIdCache.clear();
+  dependencyAllowlistCache.clear();
+}
+
+function normalizePositiveInteger(value: unknown): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+
+  return Math.floor(parsed);
+}
+
+function resolveConcurrencyLimit(explicit?: number): number {
+  const explicitLimit = normalizePositiveInteger(explicit);
+  if (explicitLimit) {
+    return explicitLimit;
+  }
+
+  const envLimit = normalizePositiveInteger(process.env.GITLAB_DEPENDENCY_CONCURRENCY);
+  if (envLimit) {
+    return envLimit;
+  }
+
+  return DEFAULT_DEPENDENCY_CONCURRENCY;
+}
+
+function toAllowlistCacheKey(sourceProjectId: number, dependencyProjectId: number): string {
+  return `${sourceProjectId}:${dependencyProjectId}`;
+}
+
 /**
  * Error thrown when a dependency manifest cannot be processed for a project.
  *
@@ -146,6 +204,10 @@ export async function processAllDependencyFiles(
  * @param dependencies - An array of dependency project names.
  * @param sourceProjectId - The ID of the source project.
  * @param logger - Logger used for emitting status updates.
+ * The function deduplicates dependency names and executes GitLab operations with a bounded concurrency level
+ * derived from the provided options or the `GITLAB_DEPENDENCY_CONCURRENCY` environment variable.
+ *
+ * @param options - Optional overrides controlling concurrency and cache usage.
  * @returns A promise that resolves when all tasks are completed.
  * @throws DependencyProcessingError when any dependency project fails to update.
  */
@@ -154,14 +216,41 @@ export async function processDependencies(
   dependencies: string[],
   sourceProjectId: number,
   logger: LoggerService,
-) {
-  const failures: DependencyFailure[] = [];
+  options: DependencyProcessingOptions = {},
+): Promise<void> {
+  const uniqueDependencies = Array.from(new Set(dependencies));
+  if (uniqueDependencies.length === 0) {
+    return;
+  }
 
-  for (const dependency of dependencies) {
+  const projectIdCache = options.projectIdCache ?? dependencyProjectIdCache;
+  const allowlistCache = options.allowlistCache ?? dependencyAllowlistCache;
+  const concurrencyLimit = Math.min(
+    uniqueDependencies.length,
+    Math.max(1, resolveConcurrencyLimit(options.concurrency)),
+  );
+
+  const failures: DependencyFailure[] = [];
+  let nextIndex = 0;
+
+  const processSingleDependency = async (dependency: string) => {
     try {
-      const dependencyProjectId = await gitlabClient.getProjectId(dependency);
-      if (!await gitlabClient.isProjectWhitelisted(sourceProjectId, dependencyProjectId)) {
+      let dependencyProjectId = projectIdCache.get(dependency);
+      if (dependencyProjectId === undefined) {
+        dependencyProjectId = await gitlabClient.getProjectId(dependency);
+        projectIdCache.set(dependency, dependencyProjectId);
+      }
+
+      const allowlistKey = toAllowlistCacheKey(sourceProjectId, dependencyProjectId);
+      let isWhitelisted = allowlistCache.get(allowlistKey);
+      if (isWhitelisted === undefined) {
+        isWhitelisted = await gitlabClient.isProjectWhitelisted(sourceProjectId, dependencyProjectId);
+        allowlistCache.set(allowlistKey, isWhitelisted);
+      }
+
+      if (!isWhitelisted) {
         await gitlabClient.allowCiJobTokenAccess(dependencyProjectId.toString(), sourceProjectId.toString());
+        allowlistCache.set(allowlistKey, true);
         logger.logProject(sourceProjectId, `Project was whitelisted in ${dependency} successfully`);
       } else {
         logger.logProject(sourceProjectId, `Project is already whitelisted in ${dependency}, skipping...`, 'warn');
@@ -174,7 +263,22 @@ export async function processDependencies(
         'error',
       );
     }
-  }
+  };
+
+  const worker = async () => {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      if (currentIndex >= uniqueDependencies.length) {
+        break;
+      }
+
+      await processSingleDependency(uniqueDependencies[currentIndex]);
+    }
+  };
+
+  const workers = Array.from({ length: concurrencyLimit }, worker);
+  await Promise.all(workers);
 
   if (failures.length > 0) {
     const summary = failures
