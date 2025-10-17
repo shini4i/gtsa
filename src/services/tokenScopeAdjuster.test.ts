@@ -3,6 +3,7 @@ import { DependencyScanner } from './dependencyScanner';
 import { DryRunReporter } from './reportingService';
 import { processDependencies } from '../utils/dependencyProcessor';
 import { GitlabClient } from '../gitlab/gitlabClient';
+import LoggerService from './logger';
 
 jest.mock('../utils/dependencyProcessor');
 
@@ -12,25 +13,32 @@ describe('TokenScopeAdjuster', () => {
   let gitlabClientMock: { getAllProjects: jest.Mock };
   let adjuster: TokenScopeAdjuster;
   let gitlabClient: GitlabClient;
-  let logSpy: jest.SpyInstance;
-  let warnSpy: jest.SpyInstance;
-  let errorSpy: jest.SpyInstance;
+  let logger: jest.Mocked<LoggerService>;
 
   beforeEach(() => {
     jest.resetAllMocks();
     scannerMock = { scan: jest.fn() };
     gitlabClientMock = { getAllProjects: jest.fn() };
     gitlabClient = gitlabClientMock as unknown as GitlabClient;
-    adjuster = new TokenScopeAdjuster(gitlabClient, scannerMock as unknown as DependencyScanner);
-    logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
-    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    logSpy.mockRestore();
-    warnSpy.mockRestore();
-    errorSpy.mockRestore();
+    logger = {
+      setTotalProjects: jest.fn(),
+      startProject: jest.fn(),
+      setProjectName: jest.fn(),
+      logProject: jest.fn(),
+      updateProjectProgress: jest.fn(),
+      updateGlobalProgress: jest.fn(),
+      clearGlobalProgress: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      completeProject: jest.fn(),
+      failProject: jest.fn(),
+    } as unknown as jest.Mocked<LoggerService>;
+    adjuster = new TokenScopeAdjuster(
+      gitlabClient,
+      logger,
+      scannerMock as unknown as DependencyScanner,
+    );
   });
 
   describe('adjustProject', () => {
@@ -49,9 +57,14 @@ describe('TokenScopeAdjuster', () => {
         projectName: 'group/project-1',
         dependencies: ['dep1', 'dep2'],
       });
-      expect(logSpy).toHaveBeenCalledWith('Dry run mode: CI_JOB_TOKEN would be whitelisted in the following projects:');
-      expect(logSpy).toHaveBeenCalledWith('- dep1');
-      expect(logSpy).toHaveBeenCalledWith('- dep2');
+      expect(logger.startProject).toHaveBeenCalledWith(1);
+      expect(logger.logProject).toHaveBeenCalledWith(
+        1,
+        'Dry run mode: CI_JOB_TOKEN would be whitelisted in the following projects:',
+      );
+      expect(logger.logProject).toHaveBeenCalledWith(1, '- dep1');
+      expect(logger.logProject).toHaveBeenCalledWith(1, '- dep2');
+      expect(logger.completeProject).toHaveBeenCalledWith(1, 'Dry run completed.');
       expect(mockProcessDependencies).not.toHaveBeenCalled();
     });
 
@@ -66,7 +79,8 @@ describe('TokenScopeAdjuster', () => {
       const entry = await adjuster.adjustProject(1, { dryRun: false, monorepo: false });
 
       expect(entry).toBeNull();
-      expect(mockProcessDependencies).toHaveBeenCalledWith(gitlabClient, ['dep1'], 1);
+      expect(mockProcessDependencies).toHaveBeenCalledWith(gitlabClient, ['dep1'], 1, logger);
+      expect(logger.completeProject).toHaveBeenCalledWith(1, 'Token scope updated successfully.');
     });
 
     test('logs an error when no dependencies are found', async () => {
@@ -80,7 +94,8 @@ describe('TokenScopeAdjuster', () => {
       const entry = await adjuster.adjustProject(1, { dryRun: false, monorepo: false });
 
       expect(entry).toBeNull();
-      expect(errorSpy).toHaveBeenCalledWith('No dependencies found to process.');
+      expect(logger.logProject).toHaveBeenCalledWith(1, 'No dependencies found to process.', 'warn');
+      expect(logger.completeProject).toHaveBeenCalledWith(1, 'No dependency changes required.');
       expect(mockProcessDependencies).not.toHaveBeenCalled();
     });
 
@@ -90,6 +105,7 @@ describe('TokenScopeAdjuster', () => {
       const entry = await adjuster.adjustProject(1, { dryRun: true, monorepo: false });
 
       expect(entry).toBeNull();
+      expect(logger.failProject).toHaveBeenCalledWith(1, 'Project could not be processed because metadata was unavailable.');
       expect(mockProcessDependencies).not.toHaveBeenCalled();
     });
   });
@@ -98,10 +114,11 @@ describe('TokenScopeAdjuster', () => {
     test('warns when no projects are returned', async () => {
       gitlabClientMock.getAllProjects.mockResolvedValue([]);
 
-      const entries = await adjuster.adjustAllProjects({ dryRun: false, monorepo: false });
+    const entries = await adjuster.adjustAllProjects({ dryRun: false, monorepo: false });
 
-      expect(entries).toEqual([]);
-      expect(warnSpy).toHaveBeenCalledWith('No projects available to process.');
+    expect(entries).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith('No projects available to process.');
+    expect(logger.clearGlobalProgress).toHaveBeenCalled();
     });
 
     test('skips projects without an ID', async () => {
@@ -113,8 +130,9 @@ describe('TokenScopeAdjuster', () => {
 
       await adjuster.adjustAllProjects({ dryRun: false, monorepo: false });
 
-      expect(warnSpy).toHaveBeenCalledWith('Encountered a project without an ID, skipping...');
+      expect(logger.warn).toHaveBeenCalledWith('Encountered a project without an ID, skipping...');
       expect(adjuster.adjustProject).toHaveBeenCalledTimes(1);
+      expect(logger.clearGlobalProgress).toHaveBeenCalled();
     });
 
     test('collects entries and interacts with reporter in dry-run mode', async () => {
@@ -134,10 +152,12 @@ describe('TokenScopeAdjuster', () => {
 
       const entries = await adjuster.adjustAllProjects({ dryRun: true, monorepo: false, reporter });
 
+      expect(logger.setTotalProjects).toHaveBeenCalledWith(1);
       expect(reporter.initialize).toHaveBeenCalled();
       expect(reporter.append).toHaveBeenCalledWith(expectedEntry);
       expect(reporter.finalize).toHaveBeenCalled();
       expect(entries).toEqual([expectedEntry]);
+      expect(logger.clearGlobalProgress).toHaveBeenCalled();
     });
 
     test('logs errors from project adjustments and throws aggregated error', async () => {
@@ -147,7 +167,8 @@ describe('TokenScopeAdjuster', () => {
 
       await expect(adjuster.adjustAllProjects({ dryRun: false, monorepo: false })).rejects.toBeInstanceOf(AdjustAllProjectsError);
 
-      expect(errorSpy).toHaveBeenCalledWith('Failed to adjust token scope for project ID 1: boom');
+      expect(logger.failProject).toHaveBeenCalledWith(1, 'Failed to adjust token scope: boom');
+      expect(logger.clearGlobalProgress).toHaveBeenCalled();
     });
   });
 });

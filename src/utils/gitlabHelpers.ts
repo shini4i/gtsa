@@ -3,6 +3,7 @@ import { GitlabApiError } from '../gitlab/errors';
 import { GitlabClient, GitlabClientOptions, NewGitlabClient } from '../gitlab/gitlabClient';
 import type { GitlabProject } from '../gitlab/types';
 import { formatError } from './errorFormatter';
+import LoggerService from '../services/logger';
 
 /**
  * Loads and validates the GitLab client configuration from environment variables.
@@ -26,17 +27,6 @@ export async function getGitlabClient(): Promise<GitlabClient> {
 }
 
 /**
- * Logs key metadata for the provided project.
- *
- * @param project - Project payload returned by GitLab.
- * @returns Promise that resolves once logging completes.
- */
-async function logProjectDetails(project: GitlabProject): Promise<void> {
-  console.log('Project name:', project.path_with_namespace);
-  console.log('Default branch:', project.default_branch);
-}
-
-/**
  * Rethrows errors encountered when fetching project details or dependency files with contextual logging.
  *
  * @param error - Original error thrown by the GitLab client.
@@ -44,8 +34,13 @@ async function logProjectDetails(project: GitlabProject): Promise<void> {
  * @param context - Description of the attempted operation.
  * @throws The original error after logging.
  */
-async function handleFetchError(error: unknown, projectId: number, context: string): Promise<never> {
-  console.error(`Failed to ${context} for project ID ${projectId}: ${formatError(error)}`);
+async function handleFetchError(
+  error: unknown,
+  projectId: number,
+  context: string,
+  logger: LoggerService,
+): Promise<never> {
+  logger.error(`Failed to ${context} for project ID ${projectId}: ${formatError(error)}`);
   throw error;
 }
 
@@ -110,31 +105,21 @@ function createGitlabClientOptions(): GitlabClientOptions | undefined {
  * @returns Promise resolving to the project object, or `null` if not found.
  * @throws Error when the project cannot be retrieved for reasons other than not found.
  */
-export async function fetchProjectDetails(gitlabClient: GitlabClient, projectId: number): Promise<GitlabProject | null> {
+export async function fetchProjectDetails(
+  gitlabClient: GitlabClient,
+  projectId: number,
+  logger: LoggerService,
+): Promise<GitlabProject | null> {
   try {
     const project = await gitlabClient.getProject(projectId.toString());
-    await logProjectDetails(project);
+    logger.setProjectName(projectId, project.path_with_namespace);
     return project;
   } catch (error) {
     if (error instanceof GitlabApiError && error.statusCode === 404) {
-      console.warn(`Project ID ${projectId} not found or inaccessible. Skipping.`);
+      logger.logProject(projectId, `Project ID ${projectId} not found or inaccessible. Skipping.`, 'warn');
       return null;
     }
-    return handleFetchError(error, projectId, 'fetch project details');
-  }
-}
-
-/**
- * Emits console output summarising discovered dependency files.
- *
- * @param dependencyFiles - Paths to dependency manifests.
- * @returns Promise that resolves after logging.
- */
-async function logDependencyFiles(dependencyFiles: string[]): Promise<void> {
-  if (dependencyFiles.length === 0) {
-    console.warn('No dependency files found');
-  } else {
-    console.log('Found the following dependency files:', dependencyFiles);
+    return handleFetchError(error, projectId, 'fetch project details', logger);
   }
 }
 
@@ -145,6 +130,8 @@ async function logDependencyFiles(dependencyFiles: string[]): Promise<void> {
  * @param projectId - Numeric project identifier.
  * @param defaultBranch - Branch against which to query the repository tree.
  * @param monorepo - When true, performs a recursive tree traversal (monorepo support).
+ * @param logger - Logger emitting progress and results.
+ * @param onProgress - Optional callback invoked with pagination progress details.
  * @returns Promise resolving to an array of manifest paths; empty array when none are found or accessible.
  * @throws Error when GitLab returns an unexpected response.
  */
@@ -153,16 +140,38 @@ export async function fetchDependencyFiles(
   projectId: number,
   defaultBranch: string,
   monorepo: boolean,
+  logger: LoggerService,
+  onProgress?: (current: number, total: number) => void,
 ): Promise<string[]> {
   try {
-    const dependencyFiles = await gitlabClient.findDependencyFiles(projectId.toString(), defaultBranch, monorepo);
-    await logDependencyFiles(dependencyFiles);
+    const dependencyFiles = await gitlabClient.findDependencyFiles(
+      projectId.toString(),
+      defaultBranch,
+      monorepo,
+      (current, total) => {
+        logger.updateProjectProgress(projectId, current, total === 0 ? undefined : total, 'Fetching repository tree');
+        if (onProgress) {
+          onProgress(current, total);
+        }
+      },
+    );
+
+    if (dependencyFiles.length === 0) {
+      logger.logProject(projectId, 'No dependency files found.', 'warn');
+    } else {
+      logger.logProject(projectId, `Found dependency files: ${dependencyFiles.join(', ')}`);
+    }
+
     return dependencyFiles;
   } catch (error) {
     if (error instanceof GitlabApiError && error.statusCode === 404) {
-      console.warn(`Repository tree not found for project ID ${projectId}; proceeding without dependency files.`);
+      logger.logProject(
+        projectId,
+        `Repository tree not found for project ID ${projectId}; proceeding without dependency files.`,
+        'warn',
+      );
       return [];
     }
-    return handleFetchError(error, projectId, 'fetch dependency files');
+    return handleFetchError(error, projectId, 'fetch dependency files', logger);
   }
 }

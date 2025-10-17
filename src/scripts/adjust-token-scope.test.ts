@@ -2,6 +2,7 @@ import { adjustTokenScope, adjustTokenScopeForAllProjects } from './adjust-token
 import { getGitlabClient } from '../utils/gitlabHelpers';
 import { TokenScopeAdjuster } from '../services/tokenScopeAdjuster';
 import { DryRunReporter } from '../services/reportingService';
+import LoggerService from '../services/logger';
 
 jest.mock('../utils/gitlabHelpers');
 jest.mock('../services/tokenScopeAdjuster');
@@ -13,6 +14,11 @@ describe('adjust-token-scope entrypoints', () => {
   const DryRunReporterMock = DryRunReporter as unknown as jest.MockedClass<typeof DryRunReporter>;
 
   const gitlabClientStub = {} as any;
+  const loggerStub = {
+    setTotalProjects: jest.fn(),
+    updateGlobalProgress: jest.fn(),
+    clearGlobalProgress: jest.fn(),
+  } as unknown as LoggerService;
   const adjusterInstance = {
     adjustProject: jest.fn(),
     adjustAllProjects: jest.fn(),
@@ -33,19 +39,19 @@ describe('adjust-token-scope entrypoints', () => {
   });
 
   test('adjustTokenScope delegates to TokenScopeAdjuster', async () => {
-    await adjustTokenScope(42, true, false);
+    await adjustTokenScope(42, true, false, loggerStub);
 
     expect(mockGetGitlabClient).toHaveBeenCalled();
-    expect(TokenScopeAdjusterMock).toHaveBeenCalledWith(gitlabClientStub);
+    expect(TokenScopeAdjusterMock).toHaveBeenCalledWith(gitlabClientStub, loggerStub);
     expect(adjusterInstance.adjustProject).toHaveBeenCalledWith(42, { dryRun: true, monorepo: false });
   });
 
   test('adjustTokenScopeForAllProjects passes reporter when dry-run and report provided', async () => {
-    await adjustTokenScopeForAllProjects(true, true, 'report.yaml');
+    await adjustTokenScopeForAllProjects(true, true, 'report.yaml', loggerStub);
 
     expect(mockGetGitlabClient).toHaveBeenCalled();
-    expect(TokenScopeAdjusterMock).toHaveBeenCalledWith(gitlabClientStub);
-    expect(DryRunReporterMock).toHaveBeenCalledWith('report.yaml');
+    expect(TokenScopeAdjusterMock).toHaveBeenCalledWith(gitlabClientStub, loggerStub);
+    expect(DryRunReporterMock).toHaveBeenCalledWith('report.yaml', loggerStub);
     expect(adjusterInstance.adjustAllProjects).toHaveBeenCalledWith({
       dryRun: true,
       monorepo: true,
@@ -54,7 +60,7 @@ describe('adjust-token-scope entrypoints', () => {
   });
 
   test('adjustTokenScopeForAllProjects omits reporter when not in dry-run mode', async () => {
-    await adjustTokenScopeForAllProjects(false, false, 'report.yaml');
+    await adjustTokenScopeForAllProjects(false, false, 'report.yaml', loggerStub);
 
     expect(DryRunReporterMock).not.toHaveBeenCalled();
     expect(adjusterInstance.adjustAllProjects).toHaveBeenCalledWith({

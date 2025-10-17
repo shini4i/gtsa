@@ -10,6 +10,14 @@ This document outlines the core modules involved in adjusting GitLab CI job toke
   - `DependencyScanner` gathers project metadata, dependency manifests, and extracted dependency projects.
   - `DryRunReporter` persists dry-run results to YAML and tracks report availability.
 
+## Logging & Visualization
+- **Logger Service (`src/services/logger.tsx`)** centralizes status updates. It renders an Ink-powered dashboard when a TTY is available and transparently falls back to plain console output otherwise. Downstream modules receive the logger instance via dependency injection, replacing direct `console.*` calls with structured `info`, `warn`, `error`, and project-scoped log events. The service also tracks a top-level progress bar so lengthy operations (such as enumerating every project) can surface as a dynamic visual indicator instead of repeated log lines.
+- **View Components (`src/view/*.tsx`)** provide the Ink interface:
+  - `App` acts as the root layout, combining global messages, project cards, and the persistent status bar.
+  - `Project` renders per-project progress, status icons, and scoped log entries.
+  - `StatusBar` aggregates totals and displays a textual progress bar.
+- **Progress Updates** flow from GitLab client pagination callbacks and dependency processing into the logger, ensuring both single-project and bulk runs repaint the CLI in real time while preserving compatibility with non-interactive environments.
+
 ## GitLab Integration
 - **Configuration (`src/config/clientConfig.ts`)** validates `GITLAB_URL` and `GITLAB_TOKEN` before client creation.
 - **Client Factory (`src/utils/gitlabHelpers.ts`)** wires configuration into `GitlabClient`, provides helper wrappers, and centralises logging for fetch operations.
@@ -33,4 +41,3 @@ This document outlines the core modules involved in adjusting GitLab CI job toke
 - Add a new manifest type by implementing `FileProcessor` and calling `registerFileProcessor('<filename>', factory)`.
 - Swap or mock GitLab access by injecting a custom `GitlabClient` into `TokenScopeAdjuster`.
 - Customize dry-run persistence by substituting the `DryRunReporter` implementation (same method signature) at construction time.
-

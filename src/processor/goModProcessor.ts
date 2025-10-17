@@ -1,4 +1,5 @@
 import { FileProcessor } from './fileProcessor';
+import LoggerService from '../services/logger';
 
 /**
  * Extracts GitLab-hosted module dependencies from Go `go.mod` files.
@@ -11,7 +12,12 @@ export class GoModProcessor implements FileProcessor {
    * @param gitlabUrl - Base GitLab URL used to recognise internal modules.
    * @returns Promise resolving to a list of dependency `path_with_namespace` strings.
   */
-  extractDependencies(fileContent: string, gitlabUrl: string): Promise<string[]> {
+  extractDependencies(
+    fileContent: string,
+    gitlabUrl: string,
+    _logger: LoggerService,
+    _projectId: number,
+  ): Promise<string[]> {
     const lines = fileContent.split('\n');
     const strippedUrl = gitlabUrl.replace('https://', '');
 

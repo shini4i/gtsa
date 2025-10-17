@@ -4,12 +4,18 @@ import { GoModProcessor } from './goModProcessor';
 import { ComposerProcessor } from './composerProcessor';
 import { NpmProcessor } from './npmProcessor';
 import { GitlabClient } from '../gitlab/gitlabClient';
+import LoggerService from '../services/logger';
 
 /**
  * Contract implemented by dependency manifest processors for various ecosystems.
  */
 export interface FileProcessor {
-  extractDependencies(fileContent: string, gitlabUrl: string): Promise<string[]>;
+  extractDependencies(
+    fileContent: string,
+    gitlabUrl: string,
+    logger: LoggerService,
+    projectId: number,
+  ): Promise<string[]>;
 }
 
 /**
@@ -52,7 +58,6 @@ export function createFileProcessor(file: string, gitlabClient: GitlabClient): F
   const factory = processorRegistry.get(baseName);
 
   if (!factory) {
-    console.log(`No processor available for file type: ${file}`);
     return undefined;
   }
 

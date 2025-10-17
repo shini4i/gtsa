@@ -1,5 +1,6 @@
 import { FileProcessor } from './fileProcessor';
 import { formatError } from '../utils/errorFormatter';
+import LoggerService from '../services/logger';
 
 /**
  * Shape of Composer repository entries relevant for dependency extraction.
@@ -23,7 +24,12 @@ export class ComposerProcessor implements FileProcessor {
    * @param gitlabUrl - Base GitLab URL used to strip hostnames from repository URLs.
    * @returns Promise resolving to a list of dependency `path_with_namespace` strings.
   */
-  extractDependencies(fileContent: string, gitlabUrl: string): Promise<string[]> {
+  extractDependencies(
+    fileContent: string,
+    gitlabUrl: string,
+    logger: LoggerService,
+    projectId: number,
+  ): Promise<string[]> {
     const dependencies: string[] = [];
     const strippedUrl = gitlabUrl.replace('https://', '');
 
@@ -36,12 +42,16 @@ export class ComposerProcessor implements FileProcessor {
             const formattedDep = repository.url.replace(`https://${strippedUrl}/`, '');
             dependencies.push(formattedDep);
           } else {
-            console.log(`Skipping repository '${key}' with URL '${repository.url}' of unknown type '${repository.type}'`);
+            logger.logProject(
+              projectId,
+              `Skipping repository '${key}' with URL '${repository.url}' of unknown type '${repository.type}'`,
+              'warn',
+            );
           }
         }
       }
     } catch (error) {
-      console.error(`Failed to parse composer.json file: ${formatError(error)}`);
+      logger.logProject(projectId, `Failed to parse composer.json file: ${formatError(error)}`, 'error');
     }
 
     return Promise.resolve(dependencies);

@@ -3,37 +3,6 @@ import axios, { AxiosInstance } from 'axios';
 import { GitlabApiError } from './errors';
 import { NewGitlabClient } from './gitlabClient';
 import type { HttpTransport } from './httpTransport';
-import { ProgressReporter } from '../utils/progressReporter';
-
-jest.mock('../utils/progressReporter', () => ({
-  __esModule: true,
-  ProgressReporter: jest.fn().mockImplementation((label: string) => ({
-    label,
-    setTotal: jest.fn(),
-    update: jest.fn(),
-    finish: jest.fn(),
-  })),
-}));
-
-type ProgressReporterInstance = {
-  label: string;
-  setTotal: jest.Mock;
-  update: jest.Mock;
-  finish: jest.Mock;
-};
-
-const getProgressMock = () => ProgressReporter as unknown as jest.Mock;
-const getProgressInstance = (index = 0): ProgressReporterInstance | undefined => {
-  const result = getProgressMock().mock.results[index];
-  return result?.value as ProgressReporterInstance | undefined;
-};
-
-const expectProgressFor = (label: string, index = 0): ProgressReporterInstance => {
-  const progress = getProgressInstance(index);
-  expect(progress).toBeDefined();
-  expect(progress?.label).toEqual(label);
-  return progress!;
-};
 
 let mock: MockAdapter;
 let httpClient: AxiosInstance;
@@ -44,7 +13,6 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
-  getProgressMock().mockClear();
   httpClient = axios.create();
   mock = new MockAdapter(httpClient);
 });
@@ -108,15 +76,12 @@ test('getAllProjects fetches every page of projects', async () => {
     return [200, page2Projects, { 'x-next-page': '' }];
   });
 
-  const projects = await client.getAllProjects();
+  const progressSpy = jest.fn();
+  const projects = await client.getAllProjects(100, progressSpy);
 
   expect(projects).toEqual([...page1Projects, ...page2Projects]);
-
-  const progress = expectProgressFor('Fetching projects');
-  expect(progress?.setTotal).toHaveBeenCalledWith(2);
-  expect(progress?.update).toHaveBeenNthCalledWith(1, 1);
-  expect(progress?.update).toHaveBeenNthCalledWith(2, 2);
-  expect(progress?.finish).toHaveBeenCalledTimes(1);
+  expect(progressSpy).toHaveBeenNthCalledWith(1, 1, 2);
+  expect(progressSpy).toHaveBeenNthCalledWith(2, 2, 2);
 });
 
 test('getAllProjects stops iteration when API returns an empty page', async () => {
@@ -127,15 +92,12 @@ test('getAllProjects stops iteration when API returns an empty page', async () =
     return [200, [], { 'x-next-page': '2' }];
   });
 
-  const projects = await client.getAllProjects();
+  const progressSpy = jest.fn();
+  const projects = await client.getAllProjects(100, progressSpy);
 
   expect(projects).toEqual([]);
   expect(mock.history.get).toHaveLength(1);
-
-  const progress = expectProgressFor('Fetching projects');
-  expect(progress?.update).not.toHaveBeenCalled();
-  expect(progress?.finish).not.toHaveBeenCalled();
-  expect(progress?.setTotal).not.toHaveBeenCalled();
+  expect(progressSpy).not.toHaveBeenCalled();
 });
 
 test('getFileContent makes a GET request and returns data', async () => {
@@ -355,15 +317,12 @@ test('findDependencyFiles makes a GET request and returns dependency files acros
     },
   }).reply(200, repositoryTreePage2, { 'x-next-page': '' });
 
-  const files = await client.findDependencyFiles(projectId, branch);
+  const progressSpy = jest.fn();
+  const files = await client.findDependencyFiles(projectId, branch, false, progressSpy);
 
   expect(files).toEqual(['go.mod', 'composer.json']);
-
-  const progress = expectProgressFor('Fetching repository tree for 1');
-  expect(progress?.setTotal).toHaveBeenCalledWith(2);
-  expect(progress?.update).toHaveBeenNthCalledWith(1, 1);
-  expect(progress?.update).toHaveBeenNthCalledWith(2, 2);
-  expect(progress?.finish).toHaveBeenCalledTimes(1);
+  expect(progressSpy).toHaveBeenNthCalledWith(1, 1, 2);
+  expect(progressSpy).toHaveBeenNthCalledWith(2, 2, 2);
 });
 
 test('findDependencyFiles returns paths when monorepo flag is true', async () => {

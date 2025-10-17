@@ -4,6 +4,7 @@ import { ProjectReportEntry } from '../report/reportGenerator';
 import { DependencyScanner } from './dependencyScanner';
 import { DryRunReporter } from './reportingService';
 import { formatError } from '../utils/errorFormatter';
+import LoggerService from './logger';
 
 /**
  * Options controlling how a single project adjustment is executed.
@@ -61,10 +62,15 @@ export class TokenScopeAdjuster {
    * Creates a new adjuster bound to a GitLab client and dependency scanner.
    *
    * @param gitlabClient - API client used for GitLab interactions.
+   * @param logger - Logger responsible for rendering CLI output.
    * @param scanner - Optional custom dependency scanner instance (defaults to the built-in scanner).
    */
-  constructor(private readonly gitlabClient: GitlabClient, scanner?: DependencyScanner) {
-    this.scanner = scanner ?? new DependencyScanner(gitlabClient);
+  constructor(
+    private readonly gitlabClient: GitlabClient,
+    private readonly logger: LoggerService,
+    scanner?: DependencyScanner,
+  ) {
+    this.scanner = scanner ?? new DependencyScanner(gitlabClient, logger);
   }
 
   /**
@@ -76,19 +82,23 @@ export class TokenScopeAdjuster {
    * @throws DependencyProcessingError when dependency updates fail.
    */
   async adjustProject(projectId: number, options: AdjustProjectOptions): Promise<ProjectReportEntry | null> {
+    this.logger.startProject(projectId);
     const result = await this.scanner.scan(projectId, options.monorepo);
     if (!result) {
+      this.logger.failProject(projectId, 'Project could not be processed because metadata was unavailable.');
       return null;
     }
 
     if (!result.dependencies || result.dependencies.length === 0) {
-      console.error('No dependencies found to process.');
+      this.logger.logProject(projectId, 'No dependencies found to process.', 'warn');
+      this.logger.completeProject(projectId, 'No dependency changes required.');
       return null;
     }
 
     if (options.dryRun) {
-      console.log('Dry run mode: CI_JOB_TOKEN would be whitelisted in the following projects:');
-      result.dependencies.forEach(dependency => console.log(`- ${dependency}`));
+      this.logger.logProject(projectId, 'Dry run mode: CI_JOB_TOKEN would be whitelisted in the following projects:');
+      result.dependencies.forEach(dependency => this.logger.logProject(projectId, `- ${dependency}`));
+      this.logger.completeProject(projectId, 'Dry run completed.');
       return {
         projectName: result.projectName,
         projectId: result.projectId,
@@ -96,7 +106,8 @@ export class TokenScopeAdjuster {
       };
     }
 
-    await processDependencies(this.gitlabClient, result.dependencies, result.projectId);
+    await processDependencies(this.gitlabClient, result.dependencies, result.projectId, this.logger);
+    this.logger.completeProject(projectId, 'Token scope updated successfully.');
     return null;
   }
 
@@ -108,15 +119,20 @@ export class TokenScopeAdjuster {
    * @throws AdjustAllProjectsError when one or more projects fail.
    */
   async adjustAllProjects(options: AdjustAllProjectsOptions): Promise<ProjectReportEntry[]> {
-    const projects = await this.gitlabClient.getAllProjects();
+    const projects = await this.gitlabClient.getAllProjects(100, (current, total) => {
+      this.logger.updateGlobalProgress('Fetching projects', current, total > 0 ? total : undefined);
+    });
 
     if (!projects || projects.length === 0) {
-      console.warn('No projects available to process.');
+      this.logger.warn('No projects available to process.');
+      this.logger.clearGlobalProgress();
       return [];
     }
 
     const collectedEntries: ProjectReportEntry[] = [];
     const failures: ProjectAdjustmentFailure[] = [];
+
+    this.logger.setTotalProjects(projects.length);
 
     if (options.dryRun && options.reporter) {
       await options.reporter.initialize();
@@ -124,7 +140,7 @@ export class TokenScopeAdjuster {
 
     for (const project of projects) {
       if (!project?.id) {
-        console.warn('Encountered a project without an ID, skipping...');
+        this.logger.warn('Encountered a project without an ID, skipping...');
         continue;
       }
 
@@ -139,7 +155,7 @@ export class TokenScopeAdjuster {
           }
         }
       } catch (error) {
-        console.error(`Failed to adjust token scope for project ID ${project.id}: ${formatError(error)}`);
+        this.logger.failProject(project.id, `Failed to adjust token scope: ${formatError(error)}`);
         failures.push({ projectId: project.id, cause: error });
       }
     }
@@ -147,6 +163,8 @@ export class TokenScopeAdjuster {
     if (options.dryRun && options.reporter) {
       options.reporter.finalize();
     }
+
+    this.logger.clearGlobalProgress();
 
     if (failures.length > 0) {
       const summary = failures

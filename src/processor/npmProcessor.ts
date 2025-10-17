@@ -1,6 +1,7 @@
 import { FileProcessor } from './fileProcessor';
 import { GitlabClient } from '../gitlab/gitlabClient';
 import { formatError } from '../utils/errorFormatter';
+import LoggerService from '../services/logger';
 
 /**
  * Minimal subset of fields parsed from an npm `package-lock.json` file.
@@ -46,9 +47,16 @@ export class NpmProcessor implements FileProcessor {
    *
    * @param fileContent - Raw JSON contents of `package-lock.json`.
    * @param gitlabUrl - Base GitLab URL used to normalise project identifiers.
+   * @param logger - Logger used for emitting diagnostic messages.
+   * @param projectId - Identifier of the project currently being processed.
    * @returns Promise resolving to a de-duplicated list of dependency project paths.
    */
-  async extractDependencies(fileContent: string, gitlabUrl: string): Promise<string[]> {
+  async extractDependencies(
+    fileContent: string,
+    gitlabUrl: string,
+    logger: LoggerService,
+    projectId: number,
+  ): Promise<string[]> {
     const packageLock: PackageLock = JSON.parse(fileContent);
     const projectIds = new Set<string>();
     const stack = [packageLock.dependencies];
@@ -58,7 +66,7 @@ export class NpmProcessor implements FileProcessor {
       if (!deps) continue;
 
       for (const details of Object.values(deps)) {
-        await this.processDependency(details, gitlabUrl, projectIds, stack);
+        await this.processDependency(details, gitlabUrl, projectIds, stack, logger, projectId);
       }
     }
 
@@ -70,11 +78,13 @@ export class NpmProcessor implements FileProcessor {
     gitlabUrl: string,
     projectIds: Set<string>,
     stack: Record<string, Dependency>[],
+    logger: LoggerService,
+    projectId: number,
   ) {
     if (details.resolved) {
-      const projectId = this.extractProjectId(details.resolved, gitlabUrl);
-      if (projectId) {
-        await this.addProjectToSet(projectId, projectIds);
+      const dependencyProjectId = this.extractProjectId(details.resolved, gitlabUrl);
+      if (dependencyProjectId) {
+        await this.addProjectToSet(dependencyProjectId, projectIds, logger, projectId);
       }
       if (details.dependencies) {
         stack.push(details.dependencies);
@@ -82,14 +92,23 @@ export class NpmProcessor implements FileProcessor {
     }
   }
 
-  private async addProjectToSet(projectId: string, projectIds: Set<string>) {
+  private async addProjectToSet(
+    projectId: string,
+    projectIds: Set<string>,
+    logger: LoggerService,
+    sourceProjectId: number,
+  ) {
     try {
       const project = await this.gitlabClient.getProject(projectId);
       if (project.path_with_namespace) {
         projectIds.add(project.path_with_namespace);
       }
     } catch (error) {
-      console.error(`Error fetching project ${projectId}: ${formatError(error)}`);
+      logger.logProject(
+        sourceProjectId,
+        `Error fetching project ${projectId}: ${formatError(error)}`,
+        'error',
+      );
     }
   }
 

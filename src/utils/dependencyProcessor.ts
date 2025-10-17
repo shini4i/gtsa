@@ -1,5 +1,6 @@
 import { GitlabClient } from '../gitlab/gitlabClient';
 import { createFileProcessor } from '../processor/fileProcessor';
+import LoggerService from '../services/logger';
 
 /**
  * Error thrown when a dependency manifest cannot be processed for a project.
@@ -58,21 +59,33 @@ export class DependencyProcessingError extends Error {
  * @param projectId - The ID of the project.
  * @param defaultBranch - The default branch of the project.
  * @param file - The path to the dependency file.
+ * @param logger - Logger used for emitting status updates.
  * @returns A promise that resolves to an array of extracted dependencies.
  * @throws DependencyFileProcessingError when the file cannot be processed.
  */
-export async function processDependencyFile(gitlabClient: GitlabClient, projectId: number, defaultBranch: string, file: string): Promise<string[]> {
+export async function processDependencyFile(
+  gitlabClient: GitlabClient,
+  projectId: number,
+  defaultBranch: string,
+  file: string,
+  logger: LoggerService,
+): Promise<string[]> {
   try {
     const fileContent = await gitlabClient.getFileContent(projectId, file, defaultBranch);
     const processor = createFileProcessor(file, gitlabClient);
 
     if (!processor) {
+      logger.logProject(projectId, `No processor available for file type: ${file}`, 'warn');
       return [];
     }
 
-    const dependencies = await processor.extractDependencies(fileContent, gitlabClient.Url);
+    const dependencies = await processor.extractDependencies(fileContent, gitlabClient.Url, logger, projectId);
 
-    console.log(`Dependencies from \x1b[36m${file}\x1b[0m that match the GitLab URL: `, dependencies);
+    const formattedDependencies = dependencies.length > 0 ? dependencies.join(', ') : 'none';
+    logger.logProject(
+      projectId,
+      `Dependencies from ${file} that match the GitLab URL: ${formattedDependencies}`,
+    );
     return dependencies;
   } catch (error) {
     throw new DependencyFileProcessingError(projectId, file, error);
@@ -86,16 +99,23 @@ export async function processDependencyFile(gitlabClient: GitlabClient, projectI
  * @param projectId - The ID of the project.
  * @param defaultBranch - The default branch of the project.
  * @param dependencyFiles - An array of paths to the dependency files.
+ * @param logger - Logger used for emitting status updates.
  * @returns A promise that resolves to an array of aggregated dependencies.
  * @throws DependencyProcessingError when any dependency file fails.
  */
-export async function processAllDependencyFiles(gitlabClient: GitlabClient, projectId: number, defaultBranch: string, dependencyFiles: string[]): Promise<string[]> {
+export async function processAllDependencyFiles(
+  gitlabClient: GitlabClient,
+  projectId: number,
+  defaultBranch: string,
+  dependencyFiles: string[],
+  logger: LoggerService,
+): Promise<string[]> {
   const allDependencies: string[] = [];
   const fileErrors: DependencyFileProcessingError[] = [];
 
   for (const file of dependencyFiles) {
     try {
-      const dependencies = await processDependencyFile(gitlabClient, projectId, defaultBranch, file);
+      const dependencies = await processDependencyFile(gitlabClient, projectId, defaultBranch, file, logger);
       allDependencies.push(...dependencies);
     } catch (error) {
       if (error instanceof DependencyFileProcessingError) {
@@ -125,10 +145,16 @@ export async function processAllDependencyFiles(gitlabClient: GitlabClient, proj
  * @param gitlabClient - The GitLab client instance.
  * @param dependencies - An array of dependency project names.
  * @param sourceProjectId - The ID of the source project.
+ * @param logger - Logger used for emitting status updates.
  * @returns A promise that resolves when all tasks are completed.
  * @throws DependencyProcessingError when any dependency project fails to update.
  */
-export async function processDependencies(gitlabClient: GitlabClient, dependencies: string[], sourceProjectId: number) {
+export async function processDependencies(
+  gitlabClient: GitlabClient,
+  dependencies: string[],
+  sourceProjectId: number,
+  logger: LoggerService,
+) {
   const failures: DependencyFailure[] = [];
 
   for (const dependency of dependencies) {
@@ -136,12 +162,17 @@ export async function processDependencies(gitlabClient: GitlabClient, dependenci
       const dependencyProjectId = await gitlabClient.getProjectId(dependency);
       if (!await gitlabClient.isProjectWhitelisted(sourceProjectId, dependencyProjectId)) {
         await gitlabClient.allowCiJobTokenAccess(dependencyProjectId.toString(), sourceProjectId.toString());
-        console.log(`===> Project was whitelisted in ${dependency} successfully`);
+        logger.logProject(sourceProjectId, `Project was whitelisted in ${dependency} successfully`);
       } else {
-        console.log(`===> Project is already whitelisted in ${dependency}, skipping...`);
+        logger.logProject(sourceProjectId, `Project is already whitelisted in ${dependency}, skipping...`, 'warn');
       }
     } catch (error) {
       failures.push({ dependency, cause: error });
+      logger.logProject(
+        sourceProjectId,
+        `Failed to whitelist dependency ${dependency}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'error',
+      );
     }
   }
 

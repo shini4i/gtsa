@@ -7,12 +7,7 @@ import { FileProcessor } from './fileProcessor';
 
 const gitlabClient = {} as GitlabClient;
 
-beforeEach(() => {
-  jest.spyOn(console, 'log').mockImplementation(() => {});
-});
-
 afterEach(() => {
-  jest.restoreAllMocks();
   resetFileProcessorRegistry();
 });
 
@@ -35,11 +30,6 @@ describe('createFileProcessor', () => {
   it('should return an instance of NpmProcessor for package-lock.json files', () => {
     const processor = createFileProcessor('package-lock.json', gitlabClient);
     expect(processor).toBeInstanceOf(NpmProcessor);
-  });
-
-  it('should log a message for unsupported file types', () => {
-    createFileProcessor('unsupported.file', gitlabClient);
-    expect(console.log).toHaveBeenCalledWith('No processor available for file type: unsupported.file');
   });
 
   it('allows registering custom processors without editing core module', () => {

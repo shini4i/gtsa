@@ -1,5 +1,6 @@
 import { ProjectReportEntry, writeYamlReport } from '../report/reportGenerator';
 import { formatError } from '../utils/errorFormatter';
+import LoggerService from './logger';
 
 /**
  * Persists dry-run results to disk as YAML while providing console feedback.
@@ -10,8 +11,9 @@ export class DryRunReporter {
 
   /**
    * @param reportPath - Destination file written on every update.
+   * @param logger - Logger used to emit user feedback.
    */
-  constructor(private readonly reportPath: string) {}
+  constructor(private readonly reportPath: string, private readonly logger: LoggerService) {}
 
 /**
  * Creates or truncates the report file and marks the reporter ready for incremental updates.
@@ -21,10 +23,10 @@ export class DryRunReporter {
   async initialize(): Promise<void> {
     try {
       await writeYamlReport([], this.reportPath);
-      console.log(`Dry run report initialized at ${this.reportPath}`);
+      this.logger.info(`Dry run report initialized at ${this.reportPath}`);
       this.ready = true;
     } catch (error) {
-      console.error(`Failed to initialize dry run report at ${this.reportPath}: ${formatError(error)}`);
+      this.logger.error(`Failed to initialize dry run report at ${this.reportPath}: ${formatError(error)}`);
     }
   }
 
@@ -43,9 +45,9 @@ export class DryRunReporter {
 
     try {
       await writeYamlReport(this.entries, this.reportPath);
-      console.log(`Dry run report updated with ${entry.projectName}`);
+      this.logger.info(`Dry run report updated with ${entry.projectName}`);
     } catch (error) {
-      console.error(`Failed to update dry run report at ${this.reportPath}: ${formatError(error)}`);
+      this.logger.error(`Failed to update dry run report at ${this.reportPath}: ${formatError(error)}`);
       this.ready = false;
     }
   }
@@ -57,10 +59,10 @@ export class DryRunReporter {
  */
   finalize(): void {
     if (!this.ready) {
-      console.warn(`Dry run report could not be generated at ${this.reportPath} due to earlier errors.`);
+      this.logger.warn(`Dry run report could not be generated at ${this.reportPath} due to earlier errors.`);
       return;
     }
 
-    console.log(`Dry run report available at ${this.reportPath}`);
+    this.logger.info(`Dry run report available at ${this.reportPath}`);
   }
 }

@@ -1,5 +1,4 @@
 import axios, { AxiosInstance, Method } from 'axios';
-import { ProgressReporter } from '../utils/progressReporter';
 import { GitlabApiError } from './errors';
 import { AxiosHttpTransport, HttpRequestConfig, HttpResponse, HttpTransport } from './httpTransport';
 import type {
@@ -141,12 +140,12 @@ export class GitlabClient {
    * @param perPage - Page size requested from the GitLab API (default 100).
    * @returns Promise that resolves to a list of project objects.
    */
-  async getAllProjects(perPage: number = 100): Promise<GitlabProject[]> {
+  async getAllProjects(perPage: number = 100, onProgress?: (current: number, total: number) => void): Promise<GitlabProject[]> {
     const projects: GitlabProject[] = [];
     let page = 1;
     let hasNextPage = true;
-    const progress = new ProgressReporter('Fetching projects');
     let fetchedPages = 0;
+    let totalPages = 0;
 
     while (hasNextPage) {
       const response = await this.executeRequest<GitlabProject[]>('get', 'projects', undefined, {
@@ -162,23 +161,21 @@ export class GitlabClient {
 
       const totalPagesHeader = response.headers['x-total-pages'];
       if (totalPagesHeader) {
-        const totalPages = Number(totalPagesHeader);
-        if (!Number.isNaN(totalPages)) {
-          progress.setTotal(totalPages);
+        const parsedTotal = Number(totalPagesHeader);
+        if (!Number.isNaN(parsedTotal)) {
+          totalPages = parsedTotal;
         }
       }
 
       fetchedPages++;
-      progress.update(fetchedPages);
+      if (onProgress) {
+        onProgress(fetchedPages, totalPages);
+      }
 
       projects.push(...response.data);
       const nextPageHeader = response.headers['x-next-page'];
       hasNextPage = Boolean(nextPageHeader && nextPageHeader !== '0');
       page++;
-    }
-
-    if (fetchedPages > 0) {
-      progress.finish();
     }
 
     return projects;
@@ -233,13 +230,18 @@ export class GitlabClient {
    * @param isMonorepo - When true, traverses the tree recursively to support monorepo layouts.
    * @returns Promise resolving to discovered file paths relative to the repository root.
    */
-  async findDependencyFiles(id: string, branch: string, isMonorepo: boolean = false): Promise<string[]> {
+  async findDependencyFiles(
+    id: string,
+    branch: string,
+    isMonorepo: boolean = false,
+    onProgress?: (current: number, total: number) => void,
+  ): Promise<string[]> {
     const targetFiles = ['go.mod', 'composer.json', 'package-lock.json'];
     let files: GitlabRepositoryTreeItem[] = [];
     let page = 1;
     let hasNextPage = true;
-    const progress = new ProgressReporter(`Fetching repository tree for ${id}`);
     let fetchedPages = 0;
+    let totalPages = 0;
 
     while (hasNextPage) {
       const response = await this.executeRequest<GitlabRepositoryTreeItem[]>(
@@ -257,23 +259,21 @@ export class GitlabClient {
 
       const totalPagesHeader = response.headers['x-total-pages'];
       if (totalPagesHeader) {
-        const totalPages = Number(totalPagesHeader);
-        if (!Number.isNaN(totalPages)) {
-          progress.setTotal(totalPages);
+        const parsedTotal = Number(totalPagesHeader);
+        if (!Number.isNaN(parsedTotal)) {
+          totalPages = parsedTotal;
         }
       }
 
       fetchedPages++;
-      progress.update(fetchedPages);
+      if (onProgress) {
+        onProgress(fetchedPages, totalPages);
+      }
 
       files = files.concat(response.data);
       const nextPage = response.headers['x-next-page'];
       hasNextPage = nextPage !== '' && !isNaN(Number(nextPage));
       page++;
-    }
-
-    if (fetchedPages > 0) {
-      progress.finish();
     }
 
     // If it's a monorepo, files parameter contains path to file

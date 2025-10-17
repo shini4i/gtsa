@@ -1,22 +1,13 @@
 import { ComposerProcessor } from './composerProcessor';
+import LoggerService from '../services/logger';
 
 describe('ComposerProcessor', () => {
   const gitlabUrl = 'https://gitlab.example.com';
   const processor = new ComposerProcessor();
-
-  let originalLog: any;
-
-  beforeAll(() => {
-    // Suppress console.log and console.error
-    originalLog = console.log;
-    console.log = jest.fn();
-    console.error = jest.fn();
-  });
-
-  afterAll(() => {
-    // Restore console.log
-    console.log = originalLog;
-  });
+  const logger = {
+    logProject: jest.fn(),
+  } as unknown as LoggerService;
+  const projectId = 42;
 
   it('should extract dependencies from repositories section', async () => {
     const fileContent = JSON.stringify({
@@ -36,7 +27,7 @@ describe('ComposerProcessor', () => {
       },
     });
 
-    const dependencies = await processor.extractDependencies(fileContent, gitlabUrl);
+    const dependencies = await processor.extractDependencies(fileContent, gitlabUrl, logger, projectId);
     expect(dependencies).toEqual([
       'test/test-helm-repository',
       'test/terraform-automation-test',
@@ -48,19 +39,19 @@ describe('ComposerProcessor', () => {
       repositories: {},
     });
 
-    const dependencies = await processor.extractDependencies(fileContent, gitlabUrl);
+    const dependencies = await processor.extractDependencies(fileContent, gitlabUrl, logger, projectId);
     expect(dependencies).toEqual([]);
   });
 
   it('should handle invalid JSON gracefully', async () => {
     const fileContent = 'invalid json';
 
-    const consoleErrorMock = jest.spyOn(console, 'error').mockImplementation(() => {
-    });
-
-    const dependencies = await processor.extractDependencies(fileContent, gitlabUrl);
+    const dependencies = await processor.extractDependencies(fileContent, gitlabUrl, logger, projectId);
     expect(dependencies).toEqual([]);
-
-    consoleErrorMock.mockRestore();
+    expect(logger.logProject).toHaveBeenCalledWith(
+      projectId,
+      expect.stringContaining('Failed to parse composer.json file'),
+      'error',
+    );
   });
 });

@@ -1,6 +1,7 @@
 import { GitlabClient } from '../gitlab/gitlabClient';
 import { fetchDependencyFiles, fetchProjectDetails } from '../utils/gitlabHelpers';
 import { processAllDependencyFiles } from '../utils/dependencyProcessor';
+import LoggerService from './logger';
 
 /**
  * Result returned by the dependency scanner containing project metadata and discovered dependencies.
@@ -24,7 +25,7 @@ export class DependencyScanner {
   /**
    * @param gitlabClient - API client used to query projects and repository trees.
    */
-  constructor(private readonly gitlabClient: GitlabClient) {}
+  constructor(private readonly gitlabClient: GitlabClient, private readonly logger: LoggerService) {}
 
   /**
    * Scans the specified project for dependency manifests and extracts GitLab-hosted dependencies.
@@ -35,19 +36,20 @@ export class DependencyScanner {
    * @throws DependencyProcessingError when dependency manifests fail to process.
    */
   async scan(projectId: number, monorepo: boolean): Promise<DependencyScanResult | null> {
-    const project = await fetchProjectDetails(this.gitlabClient, projectId);
+    const project = await fetchProjectDetails(this.gitlabClient, projectId, this.logger);
     if (!project) {
-      console.warn(`Skipping project ID ${projectId} because details could not be retrieved.`);
       return null;
     }
 
-    console.log(`\nProcessing project ${project.path_with_namespace} (ID: ${projectId})`);
+    this.logger.logProject(projectId, `Processing project ${project.path_with_namespace} (ID: ${projectId})`);
+    this.logger.logProject(projectId, `Default branch: ${project.default_branch}`);
 
     let dependencyFiles = await fetchDependencyFiles(
       this.gitlabClient,
       projectId,
       project.default_branch,
       monorepo,
+      this.logger,
     );
 
     if (!dependencyFiles) {
@@ -59,6 +61,7 @@ export class DependencyScanner {
       projectId,
       project.default_branch,
       dependencyFiles,
+      this.logger,
     );
 
     return {

@@ -2,25 +2,32 @@ import { fetchDependencyFiles, fetchProjectDetails, getGitlabClient } from './gi
 import { GitlabClient, NewGitlabClient } from '../gitlab/gitlabClient';
 import { NewClientConfig } from '../config/clientConfig';
 import { GitlabApiError } from '../gitlab/errors';
-
-beforeAll(() => {
-  jest.spyOn(console, 'error').mockImplementation(() => {
-  });
-  jest.spyOn(console, 'warn').mockImplementation(() => {
-  });
-  jest.spyOn(console, 'log').mockImplementation(() => {
-  });
-});
+import LoggerService from '../services/logger';
 
 jest.mock('../gitlab/gitlabClient');
 jest.mock('../config/clientConfig');
 
 describe('gitlabHelpers', () => {
   let mockGitlabClient: jest.Mocked<GitlabClient>;
+  let logger: jest.Mocked<LoggerService>;
 
   beforeEach(() => {
     mockGitlabClient = new GitlabClient('https://gitlab.example.com', 'test-token') as jest.Mocked<GitlabClient>;
     (GitlabClient as jest.Mock).mockReturnValue(mockGitlabClient);
+    logger = {
+      setTotalProjects: jest.fn(),
+      startProject: jest.fn(),
+      setProjectName: jest.fn(),
+      logProject: jest.fn(),
+      updateProjectProgress: jest.fn(),
+      updateGlobalProgress: jest.fn(),
+      clearGlobalProgress: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      completeProject: jest.fn(),
+      failProject: jest.fn(),
+    } as unknown as jest.Mocked<LoggerService>;
   });
 
   afterEach(() => {
@@ -37,9 +44,11 @@ describe('gitlabHelpers', () => {
       };
       mockGitlabClient.getProject.mockResolvedValue(projectDetails);
 
-      const result = await fetchProjectDetails(mockGitlabClient, projectId);
+      const result = await fetchProjectDetails(mockGitlabClient, projectId, logger);
       expect(result).toEqual(projectDetails);
       expect(mockGitlabClient.getProject).toHaveBeenCalledWith(projectId.toString());
+      expect(logger.setProjectName).toHaveBeenCalledWith(projectId, 'namespace/project');
+      expect(logger.logProject).not.toHaveBeenCalledWith(projectId, 'Default branch: main');
     });
 
     it('should log an error and rethrow if fetching project details fails', async () => {
@@ -47,8 +56,9 @@ describe('gitlabHelpers', () => {
       const error = new Error('Failed to fetch project details');
       mockGitlabClient.getProject.mockRejectedValue(error);
 
-      await expect(fetchProjectDetails(mockGitlabClient, projectId)).rejects.toThrow(error);
+      await expect(fetchProjectDetails(mockGitlabClient, projectId, logger)).rejects.toThrow(error);
       expect(mockGitlabClient.getProject).toHaveBeenCalledWith(projectId.toString());
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Failed to fetch project details for project ID 1'));
     });
 
     it('returns null and warns when project details 404', async () => {
@@ -61,11 +71,11 @@ describe('gitlabHelpers', () => {
       });
       mockGitlabClient.getProject.mockRejectedValue(apiError);
 
-      const result = await fetchProjectDetails(mockGitlabClient, projectId);
+      const result = await fetchProjectDetails(mockGitlabClient, projectId, logger);
 
       expect(result).toBeNull();
       expect(mockGitlabClient.getProject).toHaveBeenCalledWith(projectId.toString());
-      expect(console.warn).toHaveBeenCalledWith('Project ID 1 not found or inaccessible. Skipping.');
+      expect(logger.logProject).toHaveBeenCalledWith(projectId, 'Project ID 1 not found or inaccessible. Skipping.', 'warn');
     });
   });
 
@@ -76,9 +86,10 @@ describe('gitlabHelpers', () => {
       const dependencyFiles = ['file1.txt', 'file2.txt'];
       mockGitlabClient.findDependencyFiles.mockResolvedValue(dependencyFiles);
 
-      const result = await fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, false);
+      const result = await fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, false, logger);
       expect(result).toEqual(dependencyFiles);
-      expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(projectId.toString(), defaultBranch, false);
+      expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(projectId.toString(), defaultBranch, false, expect.any(Function));
+      expect(logger.logProject).toHaveBeenCalledWith(projectId, 'Found dependency files: file1.txt, file2.txt');
     });
 
     it('should log a warning and return an empty array if no dependency files are found', async () => {
@@ -86,9 +97,10 @@ describe('gitlabHelpers', () => {
       const defaultBranch = 'main';
       mockGitlabClient.findDependencyFiles.mockResolvedValue([]);
 
-      const result = await fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, false);
+      const result = await fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, false, logger);
       expect(result).toEqual([]);
-      expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(projectId.toString(), defaultBranch, false);
+      expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(projectId.toString(), defaultBranch, false, expect.any(Function));
+      expect(logger.logProject).toHaveBeenCalledWith(projectId, 'No dependency files found.', 'warn');
     });
 
     it('should log an error and rethrow if fetching dependency files fails', async () => {
@@ -97,8 +109,9 @@ describe('gitlabHelpers', () => {
       const error = new Error('Failed to fetch dependency files');
       mockGitlabClient.findDependencyFiles.mockRejectedValue(error);
 
-      await expect(fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, false)).rejects.toThrow(error);
-      expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(projectId.toString(), defaultBranch, false);
+      await expect(fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, false, logger)).rejects.toThrow(error);
+      expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(projectId.toString(), defaultBranch, false, expect.any(Function));
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Failed to fetch dependency files for project ID 1'));
     });
 
     it('returns empty array and warns when repository tree 404', async () => {
@@ -112,10 +125,14 @@ describe('gitlabHelpers', () => {
       });
       mockGitlabClient.findDependencyFiles.mockRejectedValue(apiError);
 
-      const result = await fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, false);
+      const result = await fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, false, logger);
 
       expect(result).toEqual([]);
-      expect(console.warn).toHaveBeenCalledWith('Repository tree not found for project ID 1; proceeding without dependency files.');
+      expect(logger.logProject).toHaveBeenCalledWith(
+        projectId,
+        'Repository tree not found for project ID 1; proceeding without dependency files.',
+        'warn',
+      );
     });
   });
 
