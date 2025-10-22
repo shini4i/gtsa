@@ -84,6 +84,38 @@ test('getAllProjects fetches every page of projects', async () => {
   expect(progressSpy).toHaveBeenNthCalledWith(2, 2, 2);
 });
 
+test('findDependencyFiles stops after reaching maxPages', async () => {
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
+  const projectId = '42';
+  const branch = 'main';
+
+  const repositoryTreePage1 = [{ name: 'go.mod' }];
+  const repositoryTreePage2 = [{ name: 'composer.json' }];
+
+  mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}/repository/tree`, {
+    params: {
+      ref: branch,
+      recursive: false,
+      page: 1,
+      per_page: 100,
+    },
+  }).reply(200, repositoryTreePage1, { 'x-next-page': '2', 'x-total-pages': '5' });
+
+  mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}/repository/tree`, {
+    params: {
+      ref: branch,
+      recursive: false,
+      page: 2,
+      per_page: 100,
+    },
+  }).reply(200, repositoryTreePage2, { 'x-next-page': '3', 'x-total-pages': '5' });
+
+  const files = await client.findDependencyFiles(projectId, branch, { maxPages: 1 });
+
+  expect(files).toEqual(['go.mod']);
+  expect(mock.history.get.filter(request => request.url?.endsWith('/repository/tree'))).toHaveLength(1);
+});
+
 test('getAllProjects stops iteration when API returns an empty page', async () => {
   const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
 
@@ -338,7 +370,6 @@ test('findDependencyFiles makes a GET request and returns dependency files acros
   const repositoryTreePage1 = [{ name: 'go.mod' }, { name: 'file1.txt' }];
   const repositoryTreePage2 = [{ name: 'composer.json' }, { name: 'file2.txt' }];
 
-  // Mock the first page of the repository tree
   mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}/repository/tree`, {
     params: {
       ref: branch,
@@ -348,7 +379,6 @@ test('findDependencyFiles makes a GET request and returns dependency files acros
     },
   }).reply(200, repositoryTreePage1, { 'x-next-page': '2', 'x-total-pages': '2' });
 
-  // Mock the second page of the repository tree
   mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}/repository/tree`, {
     params: {
       ref: branch,
@@ -359,7 +389,11 @@ test('findDependencyFiles makes a GET request and returns dependency files acros
   }).reply(200, repositoryTreePage2, { 'x-next-page': '' });
 
   const progressSpy = jest.fn();
-  const files = await client.findDependencyFiles(projectId, branch, false, progressSpy);
+  const files = await client.findDependencyFiles(projectId, branch, {
+    monorepo: false,
+    pageSize: 20,
+    onProgress: progressSpy,
+  });
 
   expect(files).toEqual(['go.mod', 'composer.json']);
   expect(progressSpy).toHaveBeenNthCalledWith(1, 1, 2);
@@ -373,9 +407,16 @@ test('findDependencyFiles returns paths when monorepo flag is true', async () =>
 
   const monorepoTree = [{ path: 'apps/app1/go.mod' }, { path: 'apps/app1/package-lock.json' }, { path: 'README.md' }];
 
-  mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}/repository/tree`).reply(200, monorepoTree);
+  mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}/repository/tree`, {
+    params: {
+      ref: branch,
+      recursive: true,
+      page: 1,
+      per_page: 100,
+    },
+  }).reply(200, monorepoTree, { 'x-next-page': '0' });
 
-  const files = await client.findDependencyFiles(projectId, branch, true);
+  const files = await client.findDependencyFiles(projectId, branch, { monorepo: true });
 
   expect(files).toEqual(['apps/app1/go.mod', 'apps/app1/package-lock.json']);
 });

@@ -88,7 +88,14 @@ describe('gitlabHelpers', () => {
 
       const result = await fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, false, logger);
       expect(result).toEqual(dependencyFiles);
-      expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(projectId.toString(), defaultBranch, false, expect.any(Function));
+      expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(
+        projectId.toString(),
+        defaultBranch,
+        expect.objectContaining({
+          monorepo: false,
+          onProgress: expect.any(Function),
+        }),
+      );
       expect(logger.logProject).toHaveBeenCalledWith(projectId, 'Found dependency files: file1.txt, file2.txt');
     });
 
@@ -99,7 +106,14 @@ describe('gitlabHelpers', () => {
 
       const result = await fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, false, logger);
       expect(result).toEqual([]);
-      expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(projectId.toString(), defaultBranch, false, expect.any(Function));
+      expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(
+        projectId.toString(),
+        defaultBranch,
+        expect.objectContaining({
+          monorepo: false,
+          onProgress: expect.any(Function),
+        }),
+      );
       expect(logger.logProject).toHaveBeenCalledWith(projectId, 'No dependency files found.', 'warn');
     });
 
@@ -110,7 +124,14 @@ describe('gitlabHelpers', () => {
       mockGitlabClient.findDependencyFiles.mockRejectedValue(error);
 
       await expect(fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, false, logger)).rejects.toThrow(error);
-      expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(projectId.toString(), defaultBranch, false, expect.any(Function));
+      expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(
+        projectId.toString(),
+        defaultBranch,
+        expect.objectContaining({
+          monorepo: false,
+          onProgress: expect.any(Function),
+        }),
+      );
       expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Failed to fetch dependency files for project ID 1'));
     });
 
@@ -140,19 +161,50 @@ describe('gitlabHelpers', () => {
       const defaultBranch = 'main';
       const onProgress = jest.fn();
 
-      mockGitlabClient.findDependencyFiles.mockImplementation(async (_project, _branch, _monorepo, progressCallback) => {
-        progressCallback?.(1, 0);
-        progressCallback?.(2, 4);
+      mockGitlabClient.findDependencyFiles.mockImplementation(async (_project, _branch, options) => {
+        options?.onProgress?.(1, 0);
+        options?.onProgress?.(2, 4);
         return ['package.json'];
       });
 
       const result = await fetchDependencyFiles(mockGitlabClient, projectId, defaultBranch, true, logger, onProgress);
 
       expect(result).toEqual(['package.json']);
+      expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(
+        projectId.toString(),
+        defaultBranch,
+        expect.objectContaining({
+          monorepo: true,
+          onProgress: expect.any(Function),
+        }),
+      );
       expect(logger.updateProjectProgress).toHaveBeenNthCalledWith(1, projectId, 1, undefined, 'Fetching repository tree');
       expect(logger.updateProjectProgress).toHaveBeenNthCalledWith(2, projectId, 2, 4, 'Fetching repository tree');
       expect(onProgress).toHaveBeenCalledWith(1, 0);
       expect(onProgress).toHaveBeenCalledWith(2, 4);
+    });
+
+    it('passes tree pagination overrides from environment variables', async () => {
+      process.env.GITLAB_TREE_PAGE_SIZE = '42';
+      process.env.GITLAB_TREE_MAX_PAGES = '3';
+
+      mockGitlabClient.findDependencyFiles.mockResolvedValue([]);
+
+      await fetchDependencyFiles(mockGitlabClient, 11, 'main', false, logger);
+
+      expect(mockGitlabClient.findDependencyFiles).toHaveBeenCalledWith(
+        '11',
+        'main',
+        expect.objectContaining({
+          monorepo: false,
+          pageSize: 42,
+          maxPages: 3,
+          onProgress: expect.any(Function),
+        }),
+      );
+
+      delete process.env.GITLAB_TREE_PAGE_SIZE;
+      delete process.env.GITLAB_TREE_MAX_PAGES;
     });
   });
 

@@ -4,6 +4,20 @@ import { getGitlabClient } from '../utils/gitlabHelpers';
 import LoggerService from '../services/logger';
 import type { ProjectListOptions } from '../gitlab/gitlabClient';
 
+function readPositiveIntegerEnv(name: string): number | undefined {
+  const rawValue = process.env[name];
+  if (rawValue === undefined || rawValue === '') {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+
+  return parsed;
+}
+
 /**
  * Adjusts CI job token scope for a single project using the configured GitLab credentials.
  *
@@ -47,5 +61,15 @@ export async function adjustTokenScopeForAllProjects(
   const gitlabClient = await getGitlabClient();
   const adjuster = new TokenScopeAdjuster(gitlabClient, logger);
   const reporter = dryRun && reportPath ? new DryRunReporter(reportPath, logger) : undefined;
-  await adjuster.adjustAllProjects({ dryRun, monorepo, reporter, projectQuery });
+  const concurrency = readPositiveIntegerEnv('GITLAB_PROJECT_CONCURRENCY');
+  const projectTimeoutMs = readPositiveIntegerEnv('GITLAB_PROJECT_TIMEOUT_MS');
+
+  await adjuster.adjustAllProjects({
+    dryRun,
+    monorepo,
+    reporter,
+    projectQuery,
+    concurrency,
+    projectTimeoutMs,
+  });
 }

@@ -46,7 +46,8 @@ describe('DryRunReporter', () => {
     );
   });
 
-  it('buffers entries when reporter is not ready', async () => {
+  it('lazily initialises when append is called before initialise', async () => {
+    writeYamlReportMock.mockResolvedValue(undefined);
     const reporter = new DryRunReporter(reportPath, logger);
     const entry = {
       projectId: 1,
@@ -56,8 +57,10 @@ describe('DryRunReporter', () => {
 
     await reporter.append(entry);
 
-    expect(writeYamlReportMock).not.toHaveBeenCalled();
-    expect(logger.info).not.toHaveBeenCalled();
+    expect(writeYamlReportMock).toHaveBeenNthCalledWith(1, [], reportPath);
+    expect(writeYamlReportMock).toHaveBeenNthCalledWith(2, [entry], reportPath);
+    expect(logger.info).toHaveBeenNthCalledWith(1, `Dry run report initialized at ${reportPath}`);
+    expect(logger.info).toHaveBeenNthCalledWith(2, `Dry run report updated with ${entry.projectName}`);
   });
 
   it('persists entries when reporter is ready', async () => {
@@ -103,10 +106,13 @@ describe('DryRunReporter', () => {
     writeYamlReportMock.mockClear();
     logger.info.mockClear();
 
+    writeYamlReportMock.mockResolvedValue(undefined);
+
     await reporter.append(secondEntry);
 
-    expect(writeYamlReportMock).not.toHaveBeenCalled();
-    expect(logger.info).not.toHaveBeenCalled();
+    expect(writeYamlReportMock).toHaveBeenNthCalledWith(1, [], reportPath);
+    expect(writeYamlReportMock).toHaveBeenNthCalledWith(2, [firstEntry, secondEntry], reportPath);
+    expect(logger.info).toHaveBeenCalledWith(`Dry run report updated with ${secondEntry.projectName}`);
   });
 
   it('warns when finalize is called without a ready report', () => {

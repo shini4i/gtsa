@@ -170,6 +170,43 @@ describe('TokenScopeAdjuster', () => {
       expect(gitlabClientMock.getAllProjects).toHaveBeenCalledWith(projectQuery, expect.any(Function));
     });
 
+    test('processes projects using the configured concurrency', async () => {
+      gitlabClientMock.getAllProjects.mockResolvedValue([
+        { id: 1, path_with_namespace: 'group/project-1', default_branch: 'main' },
+        { id: 2, path_with_namespace: 'group/project-2', default_branch: 'main' },
+        { id: 3, path_with_namespace: 'group/project-3', default_branch: 'main' },
+      ]);
+
+      const resolvers: Array<() => void> = [];
+      const adjustProjectSpy = jest.spyOn(adjuster, 'adjustProject').mockImplementation(() => new Promise(resolve => {
+        resolvers.push(() => resolve(null));
+      }));
+
+      const promise = adjuster.adjustAllProjects({ dryRun: false, monorepo: false, concurrency: 2 });
+
+      await Promise.resolve();
+      expect(adjustProjectSpy).toHaveBeenCalledTimes(2);
+
+      resolvers.shift()?.();
+      await Promise.resolve();
+      expect(adjustProjectSpy).toHaveBeenCalledTimes(3);
+
+      resolvers.forEach(resolve => resolve());
+      await promise;
+    });
+
+    test('records timeout failures when a project exceeds the configured limit', async () => {
+      gitlabClientMock.getAllProjects.mockResolvedValue([{ id: 1, path_with_namespace: 'group/project-1', default_branch: 'main' }]);
+
+      jest
+        .spyOn(adjuster, 'adjustProject')
+        .mockImplementation(() => new Promise(resolve => setTimeout(() => resolve(null), 100)));
+
+      await expect(adjuster.adjustAllProjects({ dryRun: false, monorepo: false, projectTimeoutMs: 20 }))
+        .rejects.toBeInstanceOf(AdjustAllProjectsError);
+      expect(logger.failProject).toHaveBeenCalledWith(1, expect.stringContaining('timed out'));
+    });
+
     test('logs errors from project adjustments and throws aggregated error', async () => {
       gitlabClientMock.getAllProjects.mockResolvedValue([{ id: 1, path_with_namespace: 'group/project-1', default_branch: 'main' }]);
       const expectedError = new Error('boom');

@@ -57,6 +57,8 @@ describe('adjust-token-scope entrypoints', () => {
       monorepo: true,
       reporter: reporterInstance,
       projectQuery: undefined,
+      concurrency: undefined,
+      projectTimeoutMs: undefined,
     });
   });
 
@@ -69,6 +71,8 @@ describe('adjust-token-scope entrypoints', () => {
       monorepo: false,
       reporter: undefined,
       projectQuery: undefined,
+      concurrency: undefined,
+      projectTimeoutMs: undefined,
     });
   });
 
@@ -82,6 +86,27 @@ describe('adjust-token-scope entrypoints', () => {
       monorepo: false,
       reporter: undefined,
       projectQuery,
+      concurrency: undefined,
+      projectTimeoutMs: undefined,
     });
+  });
+
+  test('adjustTokenScopeForAllProjects reads concurrency and timeout from environment', async () => {
+    process.env.GITLAB_PROJECT_CONCURRENCY = '6';
+    process.env.GITLAB_PROJECT_TIMEOUT_MS = '120000';
+
+    await adjustTokenScopeForAllProjects(true, false, undefined, loggerStub, undefined);
+
+    expect(adjusterInstance.adjustAllProjects).toHaveBeenLastCalledWith({
+      dryRun: true,
+      monorepo: false,
+      reporter: undefined,
+      projectQuery: undefined,
+      concurrency: 6,
+      projectTimeoutMs: 120000,
+    });
+
+    delete process.env.GITLAB_PROJECT_CONCURRENCY;
+    delete process.env.GITLAB_PROJECT_TIMEOUT_MS;
   });
 });

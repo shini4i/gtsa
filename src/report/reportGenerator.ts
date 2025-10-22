@@ -59,5 +59,13 @@ export function buildYamlReport(entries: ProjectReportEntry[]): string {
 export async function writeYamlReport(entries: ProjectReportEntry[], filePath: string): Promise<void> {
   const yamlContent = buildYamlReport(entries);
   await fs.mkdir(dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, yamlContent, 'utf8');
+  const tempPath = `${filePath}.tmp`;
+  await fs.writeFile(tempPath, yamlContent, 'utf8');
+  await fs.rm(filePath, { force: true }).catch(() => undefined);
+  try {
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    await fs.writeFile(filePath, yamlContent, 'utf8');
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
+  }
 }

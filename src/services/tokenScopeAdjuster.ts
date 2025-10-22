@@ -26,6 +26,8 @@ export interface AdjustProjectOptions {
 export interface AdjustAllProjectsOptions extends AdjustProjectOptions {
   reporter?: DryRunReporter;
   projectQuery?: ProjectListOptions;
+  concurrency?: number;
+  projectTimeoutMs?: number;
 }
 
 /**
@@ -140,27 +142,39 @@ export class TokenScopeAdjuster {
       await options.reporter.initialize();
     }
 
-    for (const project of projects) {
-      if (!project?.id) {
-        this.logger.warn('Encountered a project without an ID, skipping...');
-        continue;
-      }
+    const concurrency = Math.max(1, Math.min(options.concurrency ?? 4, projects.length));
+    let index = 0;
 
-      try {
-        const entry = await this.adjustProject(project.id, options);
+    const processNext = async () => {
+      while (index < projects.length) {
+        const currentIndex = index;
+        index += 1;
 
-        if (entry) {
-          collectedEntries.push(entry);
-
-          if (options.dryRun && options.reporter) {
-            await options.reporter.append(entry);
-          }
+        const project = projects[currentIndex];
+        if (!project?.id) {
+          this.logger.warn('Encountered a project without an ID, skipping...');
+          continue;
         }
-      } catch (error) {
-        this.logger.failProject(project.id, `Failed to adjust token scope: ${formatError(error)}`);
-        failures.push({ projectId: project.id, cause: error });
+
+        try {
+          const entry = await this.runProjectWithTimeout(project.id, options);
+
+          if (entry) {
+            collectedEntries.push(entry);
+
+            if (options.dryRun && options.reporter) {
+              await options.reporter.append(entry);
+            }
+          }
+        } catch (error) {
+          this.logger.failProject(project.id, `Failed to adjust token scope: ${formatError(error)}`);
+          failures.push({ projectId: project.id, cause: error });
+        }
       }
-    }
+    };
+
+    const workers = Array.from({ length: concurrency }, () => processNext());
+    await Promise.all(workers);
 
     if (options.dryRun && options.reporter) {
       options.reporter.finalize();
@@ -176,5 +190,58 @@ export class TokenScopeAdjuster {
     }
 
     return collectedEntries;
+  }
+
+  private runProjectWithTimeout(
+    projectId: number,
+    options: AdjustAllProjectsOptions,
+  ): Promise<ProjectReportEntry | null> {
+    const execution = this.adjustProject(projectId, options);
+    const timeoutMs = options.projectTimeoutMs;
+
+    if (!timeoutMs || timeoutMs <= 0) {
+      return execution;
+    }
+
+    return this.applyTimeout(execution, projectId, timeoutMs);
+  }
+
+  private async applyTimeout<T>(promise: Promise<T>, projectId: number, timeoutMs: number): Promise<T> {
+    let timeoutHandle: NodeJS.Timeout | undefined;
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        reject(new Error(`Project ${projectId} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+
+    try {
+      return await Promise.race([
+        promise.finally(() => {
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+            timeoutHandle = undefined;
+          }
+        }),
+        timeoutPromise,
+      ]);
+    } catch (error) {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+        timeoutHandle = undefined;
+      }
+      // Ensure the original promise settles to avoid unhandled rejections.
+      promise
+        .catch(() => {
+          /* swallow */
+        })
+        .finally(() => {
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+            timeoutHandle = undefined;
+          }
+        });
+      throw error;
+    }
   }
 }

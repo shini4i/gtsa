@@ -54,6 +54,13 @@ export interface ProjectListOptions {
   visibility?: 'private' | 'internal' | 'public';
 }
 
+export interface DependencyFileSearchOptions {
+  monorepo?: boolean;
+  pageSize?: number;
+  maxPages?: number;
+  onProgress?: (current: number, total: number) => void;
+}
+
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_DELAY_MS = 500;
@@ -339,17 +346,47 @@ export class GitlabClient {
   async findDependencyFiles(
     id: string,
     branch: string,
-    isMonorepo: boolean = false,
+    monorepo?: boolean,
     onProgress?: (current: number, total: number) => void,
+  ): Promise<string[]>;
+
+  async findDependencyFiles(
+    id: string,
+    branch: string,
+    options?: DependencyFileSearchOptions,
+  ): Promise<string[]>;
+
+  async findDependencyFiles(
+    id: string,
+    branch: string,
+    arg3: boolean | DependencyFileSearchOptions = false,
+    arg4?: (current: number, total: number) => void,
   ): Promise<string[]> {
+    const options: DependencyFileSearchOptions =
+      typeof arg3 === 'boolean'
+        ? { monorepo: arg3, onProgress: arg4 }
+        : arg3 ?? {};
+
     const targetFiles = ['go.mod', 'composer.json', 'package-lock.json'];
-    let files: GitlabRepositoryTreeItem[] = [];
+    const isMonorepo = Boolean(options.monorepo);
+    const perPage = resolvePerPage(options.pageSize);
+    const pageLimit = resolvePositiveInteger(options.maxPages);
+
+    const files: GitlabRepositoryTreeItem[] = [];
     let page = 1;
-    let hasNextPage = true;
     let fetchedPages = 0;
     let totalPages = 0;
+    const visitedPages = new Set<number>();
 
-    while (hasNextPage) {
+    while (true) {
+      if (pageLimit && fetchedPages >= pageLimit) {
+        break;
+      }
+      if (visitedPages.has(page)) {
+        break;
+      }
+      visitedPages.add(page);
+
       const response = await this.executeRequest<GitlabRepositoryTreeItem[]>(
         'get',
         `projects/${id}/repository/tree`,
@@ -357,9 +394,9 @@ export class GitlabClient {
         {
           params: {
             ref: branch,
-            recursive: isMonorepo, //Use isMonorepo flag to decide whether to fetch files recursively
+            recursive: isMonorepo,
             page,
-            per_page: 20,
+            per_page: perPage,
           },
         });
 
@@ -371,18 +408,27 @@ export class GitlabClient {
         }
       }
 
-      fetchedPages++;
-      if (onProgress) {
-        onProgress(fetchedPages, totalPages);
+      fetchedPages += 1;
+      if (options.onProgress) {
+        options.onProgress(fetchedPages, totalPages);
       }
 
-      files = files.concat(response.data);
-      const nextPage = response.headers['x-next-page'];
-      hasNextPage = nextPage !== '' && !isNaN(Number(nextPage));
-      page++;
+      if (!Array.isArray(response.data) || response.data.length === 0) {
+        break;
+      }
+
+      files.push(...response.data);
+
+      const nextPageHeader = response.headers['x-next-page'];
+      const nextPage = nextPageHeader ? Number(nextPageHeader) : NaN;
+
+      if (!Number.isFinite(nextPage) || nextPage <= page) {
+        break;
+      }
+
+      page = nextPage;
     }
 
-    // If it's a monorepo, files parameter contains path to file
     return files
       .map(file => (isMonorepo ? file.path : file.name))
       .filter((name): name is string => typeof name === 'string' && targetFiles.some(file => name.endsWith(file)));

@@ -144,15 +144,22 @@ export async function fetchDependencyFiles(
   onProgress?: (current: number, total: number) => void,
 ): Promise<string[]> {
   try {
+    const pageSize = parseNumberEnv('GITLAB_TREE_PAGE_SIZE', 1);
+    const maxPages = parseNumberEnv('GITLAB_TREE_MAX_PAGES', 1);
+
     const dependencyFiles = await gitlabClient.findDependencyFiles(
       projectId.toString(),
       defaultBranch,
-      monorepo,
-      (current, total) => {
-        logger.updateProjectProgress(projectId, current, total === 0 ? undefined : total, 'Fetching repository tree');
-        if (onProgress) {
-          onProgress(current, total);
-        }
+      {
+        monorepo,
+        pageSize,
+        maxPages,
+        onProgress: (current, total) => {
+          logger.updateProjectProgress(projectId, current, total === 0 ? undefined : total, 'Fetching repository tree');
+          if (onProgress) {
+            onProgress(current, total);
+          }
+        },
       },
     );
 
