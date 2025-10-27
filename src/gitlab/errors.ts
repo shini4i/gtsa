@@ -105,7 +105,7 @@ export class GitlabApiError extends Error {
     }
 
     // Network or timeout errors typically surface with these codes in Axios
-    const retryableCodes = ['ECONNABORTED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN'];
+    const retryableCodes = ['ECONNABORTED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'EPIPE'];
     if (error.code && retryableCodes.includes(error.code)) {
       return true;
     }

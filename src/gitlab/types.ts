@@ -26,3 +26,11 @@ export interface GitlabRepositoryFile {
   content: string;
   [key: string]: unknown;
 }
+
+export interface GitlabBlobSearchResult {
+  path?: string;
+  filename?: string;
+  basename?: string;
+  ref?: string;
+  [key: string]: unknown;
+}

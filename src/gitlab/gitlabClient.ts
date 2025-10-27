@@ -2,6 +2,7 @@ import axios, { AxiosInstance, Method } from 'axios';
 import { GitlabApiError } from './errors';
 import { AxiosHttpTransport, HttpRequestConfig, HttpResponse, HttpTransport } from './httpTransport';
 import type {
+  GitlabBlobSearchResult,
   GitlabJobTokenAllowlistEntry,
   GitlabProject,
   GitlabRepositoryFile,
@@ -105,6 +106,7 @@ export class GitlabClient {
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
   private readonly baseUrl: string;
+  private blobSearchSupported?: boolean;
 
   /**
    * Creates a new API client bound to the provided GitLab instance and token.
@@ -372,6 +374,22 @@ export class GitlabClient {
     const perPage = resolvePerPage(options.pageSize);
     const pageLimit = resolvePositiveInteger(options.maxPages);
 
+    if (this.blobSearchSupported !== false) {
+      const searchResults = await this.findDependencyFilesViaBlobSearch(
+        id,
+        branch,
+        targetFiles,
+        isMonorepo,
+      );
+
+      if (searchResults) {
+        if (options.onProgress) {
+          options.onProgress(1, 1);
+        }
+        return searchResults;
+      }
+    }
+
     const files: GitlabRepositoryTreeItem[] = [];
     let page = 1;
     let fetchedPages = 0;
@@ -432,6 +450,99 @@ export class GitlabClient {
     return files
       .map(file => (isMonorepo ? file.path : file.name))
       .filter((name): name is string => typeof name === 'string' && targetFiles.some(file => name.endsWith(file)));
+  }
+
+  private async findDependencyFilesViaBlobSearch(
+    id: string,
+    branch: string,
+    targetFiles: string[],
+    isMonorepo: boolean,
+  ): Promise<string[] | null> {
+    if (this.blobSearchSupported === false) {
+      return null;
+    }
+
+    const collected = new Set<string>();
+
+    try {
+      for (const file of targetFiles) {
+        let page = 1;
+        // Cap per_page at 100 which is the documented maximum.
+        const perPage = 100;
+
+        while (true) {
+          const response = await this.executeRequest<GitlabBlobSearchResult[]>(
+            'get',
+            `projects/${id}/search`,
+            undefined,
+            {
+              params: {
+                scope: 'blobs',
+                search: `filename:${file}`,
+                ref: branch,
+                page,
+                per_page: perPage,
+              },
+            },
+          );
+
+          if (!Array.isArray(response.data) || response.data.length === 0) {
+            break;
+          }
+
+          response.data.forEach(result => {
+            const path = typeof result.path === 'string' ? result.path : undefined;
+            const filename = typeof result.filename === 'string'
+              ? result.filename
+              : typeof result.basename === 'string'
+                ? result.basename
+                : undefined;
+
+            if (!isMonorepo && path && path.includes('/')) {
+              return;
+            }
+
+            const value = isMonorepo ? path ?? filename : filename ?? path;
+            if (value) {
+              collected.add(value);
+            }
+          });
+
+          const nextPageHeader = response.headers['x-next-page'];
+          const nextPage = nextPageHeader ? Number(nextPageHeader) : NaN;
+
+          if (!Number.isFinite(nextPage) || nextPage <= page) {
+            break;
+          }
+
+          page = nextPage;
+        }
+      }
+
+      this.blobSearchSupported = true;
+      return Array.from(collected);
+    } catch (error) {
+      if (error instanceof GitlabApiError && this.isBlobSearchUnsupported(error)) {
+        this.blobSearchSupported = false;
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  private isBlobSearchUnsupported(error: GitlabApiError): boolean {
+    if (error.statusCode && [400, 403, 404, 422].includes(error.statusCode)) {
+      return true;
+    }
+
+    if (typeof error.message === 'string') {
+      const lower = error.message.toLowerCase();
+      if (lower.includes('advanced search') || lower.includes('exact code search')) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**

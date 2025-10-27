@@ -7,6 +7,13 @@ import type { HttpTransport } from './httpTransport';
 let mock: MockAdapter;
 let httpClient: AxiosInstance;
 
+const mockSearchUnavailable = (projectId: string | number) => {
+  mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}/search`).reply(() => [
+    403,
+    { message: 'Advanced search is not enabled for this GitLab instance.' },
+  ]);
+};
+
 beforeAll(() => {
   jest.spyOn(console, 'error').mockImplementation(() => {
   });
@@ -88,6 +95,8 @@ test('findDependencyFiles stops after reaching maxPages', async () => {
   const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const projectId = '42';
   const branch = 'main';
+
+  mockSearchUnavailable(projectId);
 
   const repositoryTreePage1 = [{ name: 'go.mod' }];
   const repositoryTreePage2 = [{ name: 'composer.json' }];
@@ -206,6 +215,8 @@ test('findDependencyFiles returns an empty array when no dependency files are fo
   const projectId = '1';
   const branch = 'master';
 
+  mockSearchUnavailable(projectId);
+
   const repositoryTree = [{ name: 'other-file.txt' }, { name: 'another-file.js' }];
 
   mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}/repository/tree`)
@@ -216,10 +227,59 @@ test('findDependencyFiles returns an empty array when no dependency files are fo
   expect(files).toEqual([]);
 });
 
+test('findDependencyFiles prefers blob search when available', async () => {
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
+  const projectId = '77';
+  const branch = 'main';
+  const searchUrl = `https://gitlab.example.com/api/v4/projects/${projectId}/search`;
+
+  mock.onGet(searchUrl).reply(config => {
+    const params = config.params ?? {};
+    switch (params.search) {
+      case 'filename:go.mod':
+        return [200, [{ path: 'go.mod', filename: 'go.mod' }], { 'x-next-page': '0' }];
+      case 'filename:package-lock.json':
+        return [200, [{ path: 'services/api/package-lock.json', filename: 'package-lock.json' }], { 'x-next-page': '0' }];
+      default:
+        return [200, [], { 'x-next-page': '0' }];
+    }
+  });
+
+  const files = await client.findDependencyFiles(projectId, branch);
+
+  expect(files).toEqual(['go.mod']);
+  expect(mock.history.get.filter(request => request.url?.endsWith('/repository/tree'))).toHaveLength(0);
+});
+
+test('findDependencyFiles returns nested paths via blob search when monorepo is enabled', async () => {
+  const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
+  const projectId = '78';
+  const branch = 'main';
+  const searchUrl = `https://gitlab.example.com/api/v4/projects/${projectId}/search`;
+
+  mock.onGet(searchUrl).reply(config => {
+    const params = config.params ?? {};
+    switch (params.search) {
+      case 'filename:go.mod':
+        return [200, [{ path: 'apps/app1/go.mod', filename: 'go.mod' }], { 'x-next-page': '0' }];
+      case 'filename:package-lock.json':
+        return [200, [{ path: 'apps/app1/package-lock.json', filename: 'package-lock.json' }], { 'x-next-page': '0' }];
+      default:
+        return [200, [], { 'x-next-page': '0' }];
+    }
+  });
+
+  const files = await client.findDependencyFiles(projectId, branch, { monorepo: true });
+
+  expect(files).toEqual(['apps/app1/go.mod', 'apps/app1/package-lock.json']);
+});
+
 test('findDependencyFiles makes a GET request and returns dependency files', async () => {
   const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const projectId = '1';
   const branch = 'master';
+
+  mockSearchUnavailable(projectId);
 
   const repositoryTree = [{ name: 'go.mod' }, { name: 'composer.json' }, { name: 'other-file.txt' }];
 
@@ -367,6 +427,8 @@ test('findDependencyFiles makes a GET request and returns dependency files acros
   const projectId = '1';
   const branch = 'master';
 
+  mockSearchUnavailable(projectId);
+
   const repositoryTreePage1 = [{ name: 'go.mod' }, { name: 'file1.txt' }];
   const repositoryTreePage2 = [{ name: 'composer.json' }, { name: 'file2.txt' }];
 
@@ -404,6 +466,8 @@ test('findDependencyFiles returns paths when monorepo flag is true', async () =>
   const client = NewGitlabClient('https://gitlab.example.com', 'MyToken', { httpClient });
   const projectId = '1';
   const branch = 'master';
+
+  mockSearchUnavailable(projectId);
 
   const monorepoTree = [{ path: 'apps/app1/go.mod' }, { path: 'apps/app1/package-lock.json' }, { path: 'README.md' }];
 
