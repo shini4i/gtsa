@@ -1,0 +1,43 @@
+version: '3'
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  run:
+    desc: Run adjust-token-scope script for a specific project
+    cmds:
+      - ts-node src/cli.ts -p {{.projectId}}
+    vars:
+      projectId: '{{if .PROJECT_ID}}{{.PROJECT_ID}}{{else}}{{.ENV.PROJECT_ID}}{{end}}'
+    preconditions:
+      - sh: test -n "{{.projectId}}"
+        msg: "PROJECT_ID environment variable must be set before running this task."
+
+  dry-run:
+    desc: Dry-run adjust-token-scope script against a specific project
+    cmds:
+      - ts-node src/cli.ts -p {{.projectId}} --dry-run --monorepo
+    vars:
+      projectId: '{{if .PROJECT_ID}}{{.PROJECT_ID}}{{else}}{{.ENV.PROJECT_ID}}{{end}}'
+    preconditions:
+      - sh: test -n "{{.projectId}}"
+        msg: "PROJECT_ID environment variable must be set before running this task."
+
+  dry-run-all:
+    desc: Dry-run adjust-token-scope script against all projects
+    cmds:
+      - ts-node src/cli.ts --all --dry-run
+
+  test:
+    desc: Run all test suites
+    cmds:
+      - npm test
+
+  test-coverage:
+    desc: Run all test suites and generate coverage report
+    cmds:
+      - npm run coverage

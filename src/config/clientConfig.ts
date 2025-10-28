@@ -2,6 +2,12 @@ import 'reflect-metadata';
 import { plainToInstance } from 'class-transformer';
 import { IsDefined, IsString, validateSync } from 'class-validator';
 
+/**
+ * Configuration shape for authenticating against the GitLab API.
+ *
+ * @property Url - Base GitLab instance URL.
+ * @property Token - Personal access token or CI token with API permissions.
+ */
 export class Config {
   @IsString()
   @IsDefined({ message: 'GITLAB_URL is not defined. Please set it in your environment variables.' })
@@ -12,6 +18,12 @@ export class Config {
   Token?: string;
 }
 
+/**
+ * Builds and validates the GitLab client configuration from environment variables.
+ *
+ * @returns A validated configuration object with URL and token.
+ * @throws Error when required environment variables are missing or invalid.
+ */
 export function NewClientConfig(): Config {
   const plainConfig = {
     Url: process.env.GITLAB_URL,

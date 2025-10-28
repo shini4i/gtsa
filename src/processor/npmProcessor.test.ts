@@ -1,15 +1,20 @@
 import { escapeRegExp, NpmProcessor } from './npmProcessor';
 import { GitlabClient } from '../gitlab/gitlabClient';
+import LoggerService from '../services/logger';
 
 jest.mock('../gitlab/gitlabClient');
 
 describe('NpmProcessor', () => {
   let npmProcessor: NpmProcessor;
   let gitlabClient: GitlabClient;
+  let logger: LoggerService;
 
   beforeEach(() => {
     gitlabClient = new GitlabClient('https://gitlab.example.com', 'mytoken');
     npmProcessor = new NpmProcessor(gitlabClient);
+    logger = {
+      logProject: jest.fn(),
+    } as unknown as LoggerService;
   });
 
   test('should correctly extract project ids and return project paths', async () => {
@@ -28,13 +33,19 @@ describe('NpmProcessor', () => {
     const mockGitlabUrl = 'https://gitlab.example.com';
 
     jest.spyOn(gitlabClient, 'getProject').mockImplementation((projectId) => {
-      if (projectId === '1') return Promise.resolve({ path_with_namespace: 'namespaceA/projectA' });
-      if (projectId === '2') return Promise.resolve({ path_with_namespace: 'namespaceB/projectB' });
-      if (projectId === '3') return Promise.resolve({ path_with_namespace: 'namespaceC/projectC' });
-      return Promise.resolve({});
+      if (projectId === '1') {
+        return Promise.resolve({ id: 1, path_with_namespace: 'namespaceA/projectA', default_branch: 'main' });
+      }
+      if (projectId === '2') {
+        return Promise.resolve({ id: 2, path_with_namespace: 'namespaceB/projectB', default_branch: 'main' });
+      }
+      if (projectId === '3') {
+        return Promise.resolve({ id: 3, path_with_namespace: 'namespaceC/projectC', default_branch: 'main' });
+      }
+      return Promise.resolve({ id: Number(projectId), path_with_namespace: '', default_branch: 'main' });
     });
 
-    const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl);
+    const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl, logger, 7);
 
     expect(result.sort()).toEqual([
       'namespaceA/projectA',
@@ -51,7 +62,7 @@ describe('NpmProcessor', () => {
     const mockFileContent = JSON.stringify({ dependencies: {} });
     const mockGitlabUrl = 'https://gitlab.example.com';
 
-    const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl);
+    const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl, logger, 7);
 
     expect(result).toEqual([]);
     expect(gitlabClient.getProject).toHaveBeenCalledTimes(0);
@@ -63,7 +74,7 @@ describe('NpmProcessor', () => {
     const mockFileContent = JSON.stringify({});
     const mockGitlabUrl = 'https://gitlab.example.com';
 
-    const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl);
+    const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl, logger, 7);
 
     expect(result).toEqual([]);
     expect(gitlabClient.getProject).not.toHaveBeenCalled();
@@ -77,7 +88,7 @@ describe('NpmProcessor', () => {
     });
     const mockGitlabUrl = 'https://gitlab.example.com';
 
-    const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl);
+    const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl, logger, 7);
 
     expect(result).toEqual([]);
     expect(gitlabClient.getProject).not.toHaveBeenCalled();
@@ -92,14 +103,11 @@ describe('NpmProcessor', () => {
     const mockGitlabUrl = 'https://gitlab.example.com';
     const error = new Error('not found');
     jest.spyOn(gitlabClient, 'getProject').mockRejectedValue(error);
-    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
-    const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl);
+    const result = await npmProcessor.extractDependencies(mockFileContent, mockGitlabUrl, logger, 7);
 
     expect(result).toEqual([]);
-    expect(errorSpy).toHaveBeenCalledWith('Error fetching project 4:', error);
-
-    errorSpy.mockRestore();
+    expect(logger.logProject).toHaveBeenCalledWith(7, 'Error fetching project 4: not found', 'error');
   });
 });
 

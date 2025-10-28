@@ -1,101 +1,75 @@
-import { GitlabClient } from '../gitlab/gitlabClient';
-import { ProjectReportEntry, writeYamlReport } from '../report/reportGenerator';
-import { fetchDependencyFiles, fetchProjectDetails, getGitlabClient } from '../utils/gitlabHelpers';
-import { processAllDependencyFiles, processDependencies } from '../utils/dependencyProcessor';
+import { DryRunReporter } from '../services/reportingService';
+import { TokenScopeAdjuster } from '../services/tokenScopeAdjuster';
+import { getGitlabClient } from '../utils/gitlabHelpers';
+import LoggerService from '../services/logger';
+import type { ProjectListOptions } from '../gitlab/gitlabClient';
 
-async function adjustProjectTokenScope(gitlabClient: GitlabClient, projectId: number, dryRun: boolean, monorepo: boolean): Promise<ProjectReportEntry | null> {
-  const project = await fetchProjectDetails(gitlabClient, projectId);
-  if (!project) {
-    console.warn(`Skipping project ID ${projectId} because details could not be retrieved.`);
-    return null;
+function readPositiveIntegerEnv(name: string): number | undefined {
+  const rawValue = process.env[name];
+  if (rawValue === undefined || rawValue === '') {
+    return undefined;
   }
 
-  console.log(`\nProcessing project ${project.path_with_namespace} (ID: ${projectId})`);
-
-  let dependencyFiles = await fetchDependencyFiles(gitlabClient, projectId, project.default_branch, monorepo);
-
-  if (!dependencyFiles) {
-    dependencyFiles = [];
+  const parsed = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
   }
 
-  const allDependencies = await processAllDependencyFiles(gitlabClient, projectId, project.default_branch, dependencyFiles);
-
-  if (allDependencies && allDependencies.length > 0) {
-    if (dryRun) {
-      console.log('Dry run mode: CI_JOB_TOKEN would be whitelisted in the following projects:');
-      allDependencies.forEach(dependency => console.log(`- ${dependency}`));
-      return {
-        projectName: project.path_with_namespace,
-        projectId,
-        dependencies: allDependencies,
-      };
-    } else {
-      await processDependencies(gitlabClient, allDependencies, projectId);
-    }
-  } else {
-    console.error('No dependencies found to process.');
-  }
-
-  return null;
+  return parsed;
 }
 
-export async function adjustTokenScope(projectId: number, dryRun: boolean, monorepo: boolean) {
+/**
+ * Adjusts CI job token scope for a single project using the configured GitLab credentials.
+ *
+ * @param projectId - Numeric identifier of the project to audit.
+ * @param dryRun - When true, skips persisting allow list changes.
+ * @param monorepo - Enables recursive dependency discovery for monorepo structures.
+ * @param logger - Shared logger instance used for status updates.
+ * @returns Promise that resolves when the adjustment finishes.
+ * @throws Error when dependency processing or GitLab updates fail.
+ */
+export async function adjustTokenScope(
+  projectId: number,
+  dryRun: boolean,
+  monorepo: boolean,
+  logger: LoggerService,
+) {
   const gitlabClient = await getGitlabClient();
-  await adjustProjectTokenScope(gitlabClient, projectId, dryRun, monorepo);
+  const adjuster = new TokenScopeAdjuster(gitlabClient, logger);
+  logger.setTotalProjects(1);
+  await adjuster.adjustProject(projectId, { dryRun, monorepo });
 }
 
-export async function adjustTokenScopeForAllProjects(dryRun: boolean, monorepo: boolean, reportPath?: string) {
+/**
+ * Iterates over every accessible project and optionally emits a dry-run report.
+ *
+ * @param dryRun - When true, only reports dependency adjustments without persisting.
+ * @param monorepo - Enables recursive file tree traversal for dependency discovery.
+ * @param reportPath - Optional output path for the dry-run YAML report.
+ * @param logger - Shared logger instance used for status updates.
+ * @param projectQuery - Optional filters forwarded to the GitLab project listing API.
+ * @returns Promise that resolves after processing all accessible projects.
+ * @throws AdjustAllProjectsError when at least one project fails to adjust.
+ */
+export async function adjustTokenScopeForAllProjects(
+  dryRun: boolean,
+  monorepo: boolean,
+  reportPath: string | undefined,
+  logger: LoggerService,
+  projectQuery: ProjectListOptions | undefined,
+) {
   const gitlabClient = await getGitlabClient();
-  const projects = await gitlabClient.getAllProjects();
+  const adjuster = new TokenScopeAdjuster(gitlabClient, logger);
+  const reporter = dryRun && reportPath ? new DryRunReporter(reportPath, logger) : undefined;
+  const concurrency = readPositiveIntegerEnv('GITLAB_PROJECT_CONCURRENCY');
+  const projectTimeoutMs = readPositiveIntegerEnv('GITLAB_PROJECT_TIMEOUT_MS');
 
-  if (!projects || projects.length === 0) {
-    console.warn('No projects available to process.');
-    return;
-  }
-
-  const reportEntries: ProjectReportEntry[] = [];
-  let reportReady = false;
-
-  if (reportPath && dryRun) {
-    try {
-      await writeYamlReport([], reportPath);
-      console.log(`Dry run report initialized at ${reportPath}`);
-      reportReady = true;
-    } catch (error) {
-      console.error(`Failed to initialize dry run report at ${reportPath}:`, error);
-    }
-  }
-
-  for (const project of projects) {
-    if (!project?.id) {
-      // Certain GitLab endpoints can return summary objects without IDs (e.g., when filtered by permissions),
-      // so keep a guard here to avoid runtime failures if that happens.
-      console.warn('Encountered a project without an ID, skipping...');
-      continue;
-    }
-
-    try {
-      const entry = await adjustProjectTokenScope(gitlabClient, project.id, dryRun, monorepo);
-      if (entry) {
-        reportEntries.push(entry);
-        if (reportPath && dryRun) {
-          try {
-            await writeYamlReport(reportEntries, reportPath);
-            console.log(`Dry run report updated with ${entry.projectName}`);
-            reportReady = true;
-          } catch (error) {
-            console.error(`Failed to update dry run report at ${reportPath}:`, error);
-          }
-        }
-      }
-    } catch (error) {
-      console.error(`Failed to adjust token scope for project ID ${project.id}:`, error);
-    }
-  }
-
-  if (reportPath && dryRun && reportReady) {
-    console.log(`Dry run report available at ${reportPath}`);
-  } else if (reportPath && dryRun && !reportReady) {
-    console.warn(`Dry run report could not be generated at ${reportPath} due to earlier errors.`);
-  }
+  await adjuster.adjustAllProjects({
+    dryRun,
+    monorepo,
+    reporter,
+    projectQuery,
+    concurrency,
+    projectTimeoutMs,
+  });
 }

@@ -1,61 +1,273 @@
-import axios, { AxiosRequestConfig, Method } from 'axios';
-import { ProgressReporter } from '../utils/progressReporter';
+import axios, { AxiosInstance, Method } from 'axios';
+import { GitlabApiError } from './errors';
+import { AxiosHttpTransport, HttpRequestConfig, HttpResponse, HttpTransport } from './httpTransport';
+import type {
+  GitlabBlobSearchResult,
+  GitlabJobTokenAllowlistEntry,
+  GitlabProject,
+  GitlabRepositoryFile,
+  GitlabRepositoryTreeItem,
+} from './types';
 
+/**
+ * Optional overrides that influence how the GitLab API client behaves.
+ *
+ * @property timeoutMs - Request timeout in milliseconds.
+ * @property maxRetries - Number of retry attempts for retryable responses.
+ * @property retryDelayMs - Base delay between retries in milliseconds.
+ * @property httpClient - Custom axios instance to use instead of the default when Axios transport is desired.
+ * @property transport - Fully custom HTTP transport implementation for advanced scenarios or testing.
+ */
+export interface GitlabClientOptions {
+  timeoutMs?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
+  httpClient?: AxiosInstance;
+  transport?: HttpTransport;
+}
+
+/**
+ * Optional filters applied when enumerating projects through {@link GitlabClient.getAllProjects}.
+ *
+ * @property perPage - Maximum number of items per page (clamped between 1 and 100).
+ * @property search - Case-insensitive query applied to project name or path.
+ * @property membership - Restrict results to projects the current user or token is a member of.
+ * @property owned - Restrict results to projects owned by the current user or token.
+ * @property archived - Include archived projects when true.
+ * @property simple - Request lighter project payloads without statistics.
+ * @property minAccessLevel - Filter by minimum access level (GitLab enum value).
+ * @property pageLimit - Maximum number of pages to fetch before stopping, useful for partial scans.
+ * @property orderBy - Server-side sort field accepted by GitLab (e.g. `last_activity_at`).
+ * @property sort - Sort direction applied with `orderBy`.
+ * @property visibility - Restrict projects by visibility scope.
+ */
+export interface ProjectListOptions {
+  perPage?: number;
+  search?: string;
+  membership?: boolean;
+  owned?: boolean;
+  archived?: boolean;
+  simple?: boolean;
+  minAccessLevel?: number;
+  pageLimit?: number;
+  orderBy?: 'id' | 'name' | 'path' | 'created_at' | 'updated_at' | 'last_activity_at';
+  sort?: 'asc' | 'desc';
+  visibility?: 'private' | 'internal' | 'public';
+}
+
+export interface DependencyFileSearchOptions {
+  monorepo?: boolean;
+  pageSize?: number;
+  maxPages?: number;
+  onProgress?: (current: number, total: number) => void;
+}
+
+const DEFAULT_TIMEOUT_MS = 10000;
+const DEFAULT_MAX_RETRIES = 2;
+const DEFAULT_RETRY_DELAY_MS = 500;
+const MAX_PROJECTS_PER_PAGE = 100;
+
+function resolvePerPage(perPage?: number): number {
+  if (perPage === undefined) {
+    return MAX_PROJECTS_PER_PAGE;
+  }
+
+  const parsed = Math.floor(perPage);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return MAX_PROJECTS_PER_PAGE;
+  }
+
+  return Math.min(MAX_PROJECTS_PER_PAGE, parsed);
+}
+
+function resolvePositiveInteger(value?: number): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const parsed = Math.floor(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+
+  return parsed;
+}
+
+type RequestOverrides = Pick<HttpRequestConfig, 'headers' | 'params'>;
+
+/**
+ * Thin wrapper around the GitLab REST API that injects authentication headers and
+ * applies resilient retry logic suitable for CLI execution.
+ */
 export class GitlabClient {
   private readonly url: string;
   private readonly token: string;
+  private readonly transport: HttpTransport;
+  private readonly maxRetries: number;
+  private readonly retryDelayMs: number;
+  private readonly baseUrl: string;
+  private blobSearchSupported?: boolean;
 
-  constructor(Url: string, Token: string) {
+  /**
+   * Creates a new API client bound to the provided GitLab instance and token.
+   *
+   * @param Url - Base GitLab URL, e.g. `https://gitlab.example.com`.
+   * @param Token - Personal access token or CI token with API permissions.
+   * @param options - HTTP behaviour overrides such as retries, timeouts, or a custom axios instance.
+   */
+  constructor(Url: string, Token: string, options: GitlabClientOptions = {}) {
     this.url = Url;
     this.token = Token;
+    this.baseUrl = `${this.url}/api/v4`;
+
+    if (options.transport) {
+      this.transport = options.transport;
+    } else {
+      const axiosInstance = options.httpClient ?? axios.create();
+      axiosInstance.defaults.baseURL = this.baseUrl;
+      axiosInstance.defaults.timeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      this.transport = new AxiosHttpTransport(axiosInstance);
+    }
+
+    this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
   }
 
+  /**
+   * Returns the configured GitLab base URL.
+   *
+   * @returns Base URL configured for the client.
+   */
   get Url(): string {
     return this.url;
   }
 
-  private async executeRequest(method: Method, endpoint: string, data?: any, config?: any): Promise<any> {
-    const url = `${this.url}/api/v4/${endpoint}`;
-
+  private async executeRequest<T = unknown>(
+    method: Method,
+    endpoint: string,
+    data?: unknown,
+    config?: RequestOverrides,
+  ): Promise<HttpResponse<T>> {
+    const fullEndpoint = `${this.baseUrl}/${endpoint}`;
     const headers = {
       'PRIVATE-TOKEN': this.token,
       'Content-Type': 'application/json',
-      ...(config?.headers || {}),
+      ...(config?.headers ?? {}),
     };
 
-    const axiosConfig: AxiosRequestConfig = {
-      ...config,
+    const requestConfig: HttpRequestConfig = {
       method,
-      url,
+      url: endpoint,
       headers,
       data,
+      params: config?.params,
     };
 
-    try {
-      return await axios(axiosConfig);
-    } catch (error) {
-      console.error(`Request failed: ${method} ${url}`);
-      throw error;
+    const maxAttempts = Math.max(1, this.maxRetries + 1);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await this.transport.request<T>(requestConfig);
+      } catch (error) {
+        const apiError = GitlabApiError.fromUnknown(error, method, fullEndpoint);
+        if (attempt < maxAttempts && apiError.retryable) {
+          await this.delay(this.retryDelayMs * attempt);
+          continue;
+        }
+        throw apiError;
+      }
     }
+
+    /* istanbul ignore next -- safety net to satisfy exhaustive typing */
+    throw new GitlabApiError('GitLab API request exhausted retry attempts.', {
+      method,
+      endpoint: fullEndpoint,
+      retryable: false,
+    });
   }
 
-  async getProject(id: string) {
-    return (await this.executeRequest('get', `projects/${id}`)).data;
+  private async delay(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  async getAllProjects(perPage: number = 100) {
-    const projects: any[] = [];
+  /**
+   * Fetches full project details for the given project ID.
+   *
+   * @param id - Numeric project identifier as a string.
+   * @returns Promise that resolves to the project payload returned by GitLab.
+   */
+  async getProject(id: string): Promise<GitlabProject> {
+    return (await this.executeRequest<GitlabProject>('get', `projects/${id}`)).data;
+  }
+
+  /**
+   * Iterates through accessible projects, applying optional filters and paging limits while reporting progress.
+   *
+   * @param options - Filters and pagination controls forwarded to the GitLab API.
+   * @param onProgress - Optional callback invoked after each page is fetched.
+   * @returns Promise that resolves to the aggregated list of projects.
+   */
+  async getAllProjects(
+    options: ProjectListOptions = {},
+    onProgress?: (current: number, total: number) => void,
+  ): Promise<GitlabProject[]> {
+    const perPage = resolvePerPage(options.perPage);
+    const pageLimit = resolvePositiveInteger(options.pageLimit);
+    const projects: GitlabProject[] = [];
     let page = 1;
     let hasNextPage = true;
-    const progress = new ProgressReporter('Fetching projects');
     let fetchedPages = 0;
+    let totalPages = 0;
 
     while (hasNextPage) {
-      const response = await this.executeRequest('get', 'projects', null, {
-        params: {
-          page,
-          per_page: perPage,
-        },
+      if (pageLimit && fetchedPages >= pageLimit) {
+        break;
+      }
+
+      const params: Record<string, unknown> = {
+        page,
+        per_page: perPage,
+      };
+
+      if (options.search) {
+        params.search = options.search;
+      }
+
+      if (options.membership !== undefined) {
+        params.membership = options.membership;
+      }
+
+      if (options.owned !== undefined) {
+        params.owned = options.owned;
+      }
+
+      if (options.archived !== undefined) {
+        params.archived = options.archived;
+      }
+
+      if (options.simple !== undefined) {
+        params.simple = options.simple;
+      }
+
+      const minAccessLevel = resolvePositiveInteger(options.minAccessLevel);
+      if (minAccessLevel !== undefined) {
+        params.min_access_level = minAccessLevel;
+      }
+
+      if (options.orderBy) {
+        params.order_by = options.orderBy;
+      }
+
+      if (options.sort) {
+        params.sort = options.sort;
+      }
+
+      if (options.visibility) {
+        params.visibility = options.visibility;
+      }
+
+      const response = await this.executeRequest<GitlabProject[]>('get', 'projects', undefined, {
+        params,
       });
 
       if (!Array.isArray(response.data) || response.data.length === 0) {
@@ -64,14 +276,16 @@ export class GitlabClient {
 
       const totalPagesHeader = response.headers['x-total-pages'];
       if (totalPagesHeader) {
-        const totalPages = Number(totalPagesHeader);
-        if (!Number.isNaN(totalPages)) {
-          progress.setTotal(totalPages);
+        const parsedTotal = Number(totalPagesHeader);
+        if (!Number.isNaN(parsedTotal)) {
+          totalPages = parsedTotal;
         }
       }
 
       fetchedPages++;
-      progress.update(fetchedPages);
+      if (onProgress) {
+        onProgress(fetchedPages, totalPages);
+      }
 
       projects.push(...response.data);
       const nextPageHeader = response.headers['x-next-page'];
@@ -79,80 +293,275 @@ export class GitlabClient {
       page++;
     }
 
-    if (fetchedPages > 0) {
-      progress.finish();
-    }
-
     return projects;
   }
 
-  async getProjectId(path_with_namespace: string) {
-    return (await this.executeRequest('get', `projects/${encodeURIComponent(path_with_namespace)}`)).data.id;
+  /**
+   * Resolves the numeric project ID for a given `path_with_namespace`.
+   *
+   * @param path_with_namespace - Full namespace-qualified project path.
+   * @returns Promise that resolves to the numeric ID for the project.
+   */
+  async getProjectId(path_with_namespace: string): Promise<number> {
+    return (await this.executeRequest<GitlabProject>(
+      'get',
+      `projects/${encodeURIComponent(path_with_namespace)}`,
+    )).data.id;
   }
 
-  async isProjectWhitelisted(sourceProjectId: number, depProjectId: number) {
-    try {
-      const allowList = (await this.executeRequest('get', `projects/${depProjectId}/job_token_scope/allowlist`)).data;
-      return allowList.some((project: any) => project.id === sourceProjectId);
-    } catch (error) {
-      console.error(`Request failed: GET job_token_scope/allowlist`);
-      throw error;
-    }
+  /**
+   * Checks whether a dependency project already allows CI job token access from the source project.
+   *
+   * @param sourceProjectId - Project requesting access.
+   * @param depProjectId - Dependency project to inspect.
+   * @returns Promise resolving to `true` when the dependency allow list already includes the source project.
+   */
+  async isProjectWhitelisted(sourceProjectId: number, depProjectId: number): Promise<boolean> {
+    const allowList = (await this.executeRequest<GitlabJobTokenAllowlistEntry[]>(
+      'get',
+      `projects/${depProjectId}/job_token_scope/allowlist`,
+    )).data;
+    return allowList.some(project => project.id === sourceProjectId);
   }
 
+  /**
+   * Adds a project to the CI job token allow list for the given source project.
+   *
+   * @param sourceProjectId - Project whose allowlist should be updated.
+   * @param targetProjectId - Project to allow access for.
+   * @returns Promise that resolves once the allow list has been updated.
+   */
   async allowCiJobTokenAccess(sourceProjectId: string, targetProjectId: string) {
     await this.executeRequest('post', `projects/${sourceProjectId}/job_token_scope/allowlist`, {
       target_project_id: targetProjectId,
     });
   }
 
-  async findDependencyFiles(id: string, branch: string, isMonorepo: boolean = false) {
-    const targetFiles = ['go.mod', 'composer.json', 'package-lock.json'];
-    let files: any[] = [];
-    let page = 1;
-    let hasNextPage = true;
-    const progress = new ProgressReporter(`Fetching repository tree for ${id}`);
-    let fetchedPages = 0;
+  /**
+   * Searches the repository tree for supported dependency manifests.
+   *
+   * @param id - Target project ID.
+   * @param branch - Branch or ref to inspect.
+   * @param isMonorepo - When true, traverses the tree recursively to support monorepo layouts.
+   * @returns Promise resolving to discovered file paths relative to the repository root.
+   */
+  async findDependencyFiles(
+    id: string,
+    branch: string,
+    monorepo?: boolean,
+    onProgress?: (current: number, total: number) => void,
+  ): Promise<string[]>;
 
-    while (hasNextPage) {
-      const response = await this.executeRequest('get', `projects/${id}/repository/tree`, null, {
-        params: {
-          ref: branch,
-          recursive: isMonorepo, //Use isMonorepo flag to decide whether to fetch files recursively
-          page,
-          per_page: 20,
-        },
-      });
+  async findDependencyFiles(
+    id: string,
+    branch: string,
+    options?: DependencyFileSearchOptions,
+  ): Promise<string[]>;
+
+  async findDependencyFiles(
+    id: string,
+    branch: string,
+    arg3: boolean | DependencyFileSearchOptions = false,
+    arg4?: (current: number, total: number) => void,
+  ): Promise<string[]> {
+    const options: DependencyFileSearchOptions =
+      typeof arg3 === 'boolean'
+        ? { monorepo: arg3, onProgress: arg4 }
+        : arg3 ?? {};
+
+    const targetFiles = ['go.mod', 'composer.json', 'composer.lock', 'package-lock.json'];
+    const isMonorepo = Boolean(options.monorepo);
+    const perPage = resolvePerPage(options.pageSize);
+    const pageLimit = resolvePositiveInteger(options.maxPages);
+
+    if (this.blobSearchSupported !== false) {
+      const searchResults = await this.findDependencyFilesViaBlobSearch(
+        id,
+        branch,
+        targetFiles,
+        isMonorepo,
+      );
+
+      if (searchResults) {
+        if (options.onProgress) {
+          options.onProgress(1, 1);
+        }
+        return searchResults;
+      }
+    }
+
+    const files: GitlabRepositoryTreeItem[] = [];
+    let page = 1;
+    let fetchedPages = 0;
+    let totalPages = 0;
+    const visitedPages = new Set<number>();
+
+    while (true) {
+      if (pageLimit && fetchedPages >= pageLimit) {
+        break;
+      }
+      if (visitedPages.has(page)) {
+        break;
+      }
+      visitedPages.add(page);
+
+      const response = await this.executeRequest<GitlabRepositoryTreeItem[]>(
+        'get',
+        `projects/${id}/repository/tree`,
+        undefined,
+        {
+          params: {
+            ref: branch,
+            recursive: isMonorepo,
+            page,
+            per_page: perPage,
+          },
+        });
 
       const totalPagesHeader = response.headers['x-total-pages'];
       if (totalPagesHeader) {
-        const totalPages = Number(totalPagesHeader);
-        if (!Number.isNaN(totalPages)) {
-          progress.setTotal(totalPages);
+        const parsedTotal = Number(totalPagesHeader);
+        if (!Number.isNaN(parsedTotal)) {
+          totalPages = parsedTotal;
         }
       }
 
-      fetchedPages++;
-      progress.update(fetchedPages);
+      fetchedPages += 1;
+      if (options.onProgress) {
+        options.onProgress(fetchedPages, totalPages);
+      }
 
-      files = files.concat(response.data);
-      const nextPage = response.headers['x-next-page'];
-      hasNextPage = nextPage !== '' && !isNaN(Number(nextPage));
-      page++;
+      if (!Array.isArray(response.data) || response.data.length === 0) {
+        break;
+      }
+
+      files.push(...response.data);
+
+      const nextPageHeader = response.headers['x-next-page'];
+      const nextPage = nextPageHeader ? Number(nextPageHeader) : NaN;
+
+      if (!Number.isFinite(nextPage) || nextPage <= page) {
+        break;
+      }
+
+      page = nextPage;
     }
 
-    if (fetchedPages > 0) {
-      progress.finish();
-    }
-
-    // If it's a monorepo, files parameter contains path to file
-    return files.map((f: { path: any; name: any; }) => isMonorepo ? f.path : f.name)
-      .filter((name: string) => targetFiles.some(file => name.endsWith(file)));
+    return files
+      .map(file => (isMonorepo ? file.path : file.name))
+      .filter((name): name is string => typeof name === 'string' && targetFiles.some(file => name.endsWith(file)));
   }
 
-  async getFileContent(id: number, file_path: string, branch: string) {
+  private async findDependencyFilesViaBlobSearch(
+    id: string,
+    branch: string,
+    targetFiles: string[],
+    isMonorepo: boolean,
+  ): Promise<string[] | null> {
+    if (this.blobSearchSupported === false) {
+      return null;
+    }
+
+    const collected = new Set<string>();
+
+    try {
+      for (const file of targetFiles) {
+        let page = 1;
+        // Cap per_page at 100 which is the documented maximum.
+        const perPage = 100;
+
+        while (true) {
+          const response = await this.executeRequest<GitlabBlobSearchResult[]>(
+            'get',
+            `projects/${id}/search`,
+            undefined,
+            {
+              params: {
+                scope: 'blobs',
+                search: `filename:${file}`,
+                ref: branch,
+                page,
+                per_page: perPage,
+              },
+            },
+          );
+
+          if (!Array.isArray(response.data) || response.data.length === 0) {
+            break;
+          }
+
+          response.data.forEach(result => {
+            const path = typeof result.path === 'string' ? result.path : undefined;
+            const filename = typeof result.filename === 'string'
+              ? result.filename
+              : typeof result.basename === 'string'
+                ? result.basename
+                : undefined;
+
+            if (!isMonorepo && path && path.includes('/')) {
+              return;
+            }
+
+            const value = isMonorepo ? path ?? filename : filename ?? path;
+            if (value) {
+              collected.add(value);
+            }
+          });
+
+          const nextPageHeader = response.headers['x-next-page'];
+          const nextPage = nextPageHeader ? Number(nextPageHeader) : NaN;
+
+          if (!Number.isFinite(nextPage) || nextPage <= page) {
+            break;
+          }
+
+          page = nextPage;
+        }
+      }
+
+      this.blobSearchSupported = true;
+      return Array.from(collected);
+    } catch (error) {
+      if (error instanceof GitlabApiError && this.isBlobSearchUnsupported(error)) {
+        this.blobSearchSupported = false;
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  private isBlobSearchUnsupported(error: GitlabApiError): boolean {
+    if (error.statusCode && [400, 403, 404, 422].includes(error.statusCode)) {
+      return true;
+    }
+
+    if (typeof error.message === 'string') {
+      const lower = error.message.toLowerCase();
+      if (lower.includes('advanced search') || lower.includes('exact code search')) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Downloads the decoded contents of a repository file.
+   *
+   * @param id - Project identifier.
+   * @param file_path - Path to the file within the repository.
+   * @param branch - Ref specifying which version of the file to retrieve.
+   * @returns Promise resolving to the UTF-8 decoded file contents.
+   * @throws Error when GitLab returns an unexpected encoding.
+   */
+  async getFileContent(id: number, file_path: string, branch: string): Promise<string> {
     const encodedFilePath = encodeURIComponent(file_path);
-    const response = await this.executeRequest('get', `projects/${id}/repository/files/${encodedFilePath}`, null, { params: { ref: branch } });
+    const response = await this.executeRequest<GitlabRepositoryFile>(
+      'get',
+      `projects/${id}/repository/files/${encodedFilePath}`,
+      undefined,
+      { params: { ref: branch } },
+    );
 
     if (response.data.encoding !== 'base64') {
       throw new Error('Unexpected encoding of file content received from GitLab API');
@@ -162,6 +571,14 @@ export class GitlabClient {
   }
 }
 
-export function NewGitlabClient(Url: string, Token: string) {
-  return new GitlabClient(Url, Token);
+/**
+ * Convenience factory that returns a {@link GitlabClient} with the provided settings.
+ *
+ * @param Url - Base GitLab URL.
+ * @param Token - API token used for authentication.
+ * @param options - Client configuration overrides.
+ * @returns Instantiated {@link GitlabClient}.
+ */
+export function NewGitlabClient(Url: string, Token: string, options?: GitlabClientOptions) {
+  return new GitlabClient(Url, Token, options);
 }

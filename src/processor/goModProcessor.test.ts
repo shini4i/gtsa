@@ -1,4 +1,5 @@
 import { GoModProcessor } from './goModProcessor';
+import LoggerService from '../services/logger';
 
 describe('GoModProcessor', () => {
   let goModProcessor: GoModProcessor;
@@ -22,7 +23,8 @@ require (
 )
 `;
     const gitlabUrl = 'https://gitlab.example.com';
-    const result = await goModProcessor.extractDependencies(goModFileContent, gitlabUrl);
+    const logger = { logProject: jest.fn() } as unknown as LoggerService;
+    const result = await goModProcessor.extractDependencies(goModFileContent, gitlabUrl, logger, 99);
 
     expect(result).toEqual([
       'my/repo',
