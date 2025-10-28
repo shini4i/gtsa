@@ -238,8 +238,10 @@ test('findDependencyFiles prefers blob search when available', async () => {
     switch (params.search) {
       case 'filename:go.mod':
         return [200, [{ path: 'go.mod', filename: 'go.mod' }], { 'x-next-page': '0' }];
+      case 'filename:composer.lock':
+        return [200, [{ path: 'composer.lock', filename: 'composer.lock' }], { 'x-next-page': '0' }];
       case 'filename:package-lock.json':
-        return [200, [{ path: 'services/api/package-lock.json', filename: 'package-lock.json' }], { 'x-next-page': '0' }];
+        return [200, [{ path: 'package-lock.json', filename: 'package-lock.json' }], { 'x-next-page': '0' }];
       default:
         return [200, [], { 'x-next-page': '0' }];
     }
@@ -247,7 +249,7 @@ test('findDependencyFiles prefers blob search when available', async () => {
 
   const files = await client.findDependencyFiles(projectId, branch);
 
-  expect(files).toEqual(['go.mod']);
+  expect(files).toEqual(['go.mod', 'composer.lock', 'package-lock.json']);
   expect(mock.history.get.filter(request => request.url?.endsWith('/repository/tree'))).toHaveLength(0);
 });
 
@@ -262,6 +264,8 @@ test('findDependencyFiles returns nested paths via blob search when monorepo is 
     switch (params.search) {
       case 'filename:go.mod':
         return [200, [{ path: 'apps/app1/go.mod', filename: 'go.mod' }], { 'x-next-page': '0' }];
+      case 'filename:composer.lock':
+        return [200, [{ path: 'apps/app1/composer.lock', filename: 'composer.lock' }], { 'x-next-page': '0' }];
       case 'filename:package-lock.json':
         return [200, [{ path: 'apps/app1/package-lock.json', filename: 'package-lock.json' }], { 'x-next-page': '0' }];
       default:
@@ -271,7 +275,7 @@ test('findDependencyFiles returns nested paths via blob search when monorepo is 
 
   const files = await client.findDependencyFiles(projectId, branch, { monorepo: true });
 
-  expect(files).toEqual(['apps/app1/go.mod', 'apps/app1/package-lock.json']);
+  expect(files).toEqual(['apps/app1/go.mod', 'apps/app1/composer.lock', 'apps/app1/package-lock.json']);
 });
 
 test('findDependencyFiles makes a GET request and returns dependency files', async () => {
@@ -281,14 +285,14 @@ test('findDependencyFiles makes a GET request and returns dependency files', asy
 
   mockSearchUnavailable(projectId);
 
-  const repositoryTree = [{ name: 'go.mod' }, { name: 'composer.json' }, { name: 'other-file.txt' }];
+  const repositoryTree = [{ name: 'go.mod' }, { name: 'composer.json' }, { name: 'composer.lock' }, { name: 'other-file.txt' }];
 
   mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}/repository/tree`)
     .reply(200, repositoryTree);
 
   const files = await client.findDependencyFiles(projectId, branch);
 
-  expect(files).toEqual(['go.mod', 'composer.json']);
+  expect(files).toEqual(['go.mod', 'composer.json', 'composer.lock']);
 });
 
 test('getProjectId makes a GET request and returns data', async () => {
@@ -430,7 +434,7 @@ test('findDependencyFiles makes a GET request and returns dependency files acros
   mockSearchUnavailable(projectId);
 
   const repositoryTreePage1 = [{ name: 'go.mod' }, { name: 'file1.txt' }];
-  const repositoryTreePage2 = [{ name: 'composer.json' }, { name: 'file2.txt' }];
+  const repositoryTreePage2 = [{ name: 'composer.json' }, { name: 'composer.lock' }, { name: 'file2.txt' }];
 
   mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}/repository/tree`, {
     params: {
@@ -457,7 +461,7 @@ test('findDependencyFiles makes a GET request and returns dependency files acros
     onProgress: progressSpy,
   });
 
-  expect(files).toEqual(['go.mod', 'composer.json']);
+  expect(files).toEqual(['go.mod', 'composer.json', 'composer.lock']);
   expect(progressSpy).toHaveBeenNthCalledWith(1, 1, 2);
   expect(progressSpy).toHaveBeenNthCalledWith(2, 2, 2);
 });
@@ -469,7 +473,12 @@ test('findDependencyFiles returns paths when monorepo flag is true', async () =>
 
   mockSearchUnavailable(projectId);
 
-  const monorepoTree = [{ path: 'apps/app1/go.mod' }, { path: 'apps/app1/package-lock.json' }, { path: 'README.md' }];
+  const monorepoTree = [
+    { path: 'apps/app1/go.mod' },
+    { path: 'apps/app1/package-lock.json' },
+    { path: 'apps/app1/composer.lock' },
+    { path: 'README.md' },
+  ];
 
   mock.onGet(`https://gitlab.example.com/api/v4/projects/${projectId}/repository/tree`, {
     params: {
@@ -482,7 +491,7 @@ test('findDependencyFiles returns paths when monorepo flag is true', async () =>
 
   const files = await client.findDependencyFiles(projectId, branch, { monorepo: true });
 
-  expect(files).toEqual(['apps/app1/go.mod', 'apps/app1/package-lock.json']);
+  expect(files).toEqual(['apps/app1/go.mod', 'apps/app1/package-lock.json', 'apps/app1/composer.lock']);
 });
 
 test('gitlab client should return the correct url', async () => {

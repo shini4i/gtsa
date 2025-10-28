@@ -369,7 +369,7 @@ export class GitlabClient {
         ? { monorepo: arg3, onProgress: arg4 }
         : arg3 ?? {};
 
-    const targetFiles = ['go.mod', 'composer.json', 'package-lock.json'];
+    const targetFiles = ['go.mod', 'composer.json', 'composer.lock', 'package-lock.json'];
     const isMonorepo = Boolean(options.monorepo);
     const perPage = resolvePerPage(options.pageSize);
     const pageLimit = resolvePositiveInteger(options.maxPages);

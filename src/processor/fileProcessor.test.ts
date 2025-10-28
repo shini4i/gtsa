@@ -4,6 +4,7 @@ import { ComposerProcessor } from './composerProcessor';
 import { GitlabClient } from '../gitlab/gitlabClient';
 import { NpmProcessor } from './npmProcessor';
 import { FileProcessor } from './fileProcessor';
+import { ComposerLockProcessor } from './composerLockProcessor';
 
 const gitlabClient = {} as GitlabClient;
 
@@ -20,6 +21,11 @@ describe('createFileProcessor', () => {
   it('should return an instance of ComposerProcessor for composer.json files', () => {
     const processor = createFileProcessor('composer.json', gitlabClient);
     expect(processor).toBeInstanceOf(ComposerProcessor);
+  });
+
+  it('should return an instance of ComposerLockProcessor for composer.lock files', () => {
+    const processor = createFileProcessor('composer.lock', gitlabClient);
+    expect(processor).toBeInstanceOf(ComposerLockProcessor);
   });
 
   it('should return undefined for unsupported file types', () => {

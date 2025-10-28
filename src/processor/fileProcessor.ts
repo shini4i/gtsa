@@ -2,6 +2,7 @@ import path from 'path';
 
 import { GoModProcessor } from './goModProcessor';
 import { ComposerProcessor } from './composerProcessor';
+import { ComposerLockProcessor } from './composerLockProcessor';
 import { NpmProcessor } from './npmProcessor';
 import { GitlabClient } from '../gitlab/gitlabClient';
 import LoggerService from '../services/logger';
@@ -70,6 +71,7 @@ export function createFileProcessor(file: string, gitlabClient: GitlabClient): F
 function registerDefaultFileProcessors() {
   registerFileProcessor('go.mod', () => new GoModProcessor());
   registerFileProcessor('composer.json', () => new ComposerProcessor());
+  registerFileProcessor('composer.lock', (gitlabClient) => new ComposerLockProcessor(gitlabClient));
   registerFileProcessor('package-lock.json', (gitlabClient) => new NpmProcessor(gitlabClient));
 }
 
