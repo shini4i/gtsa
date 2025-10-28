@@ -54,4 +54,24 @@ describe('ComposerProcessor', () => {
       'error',
     );
   });
+
+  it('should skip GitLab group package endpoints and log a warning', async () => {
+    const fileContent = JSON.stringify({
+      repositories: {
+        'group-package': {
+          type: 'composer',
+          url: 'https://gitlab.example.com/api/v4/group/240/-/packages/composer/',
+        },
+      },
+    });
+
+    const dependencies = await processor.extractDependencies(fileContent, gitlabUrl, logger, projectId);
+
+    expect(dependencies).toEqual([]);
+    expect(logger.logProject).toHaveBeenCalledWith(
+      projectId,
+      "Skipping GitLab group package endpoint '/api/v4/group/240/-/packages/composer/'. Group-level Composer packages cannot be allowlisted automatically.",
+      'warn',
+    );
+  });
 });

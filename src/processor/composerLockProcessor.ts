@@ -30,6 +30,7 @@ type ApiReference =
  */
 export class ComposerLockProcessor implements FileProcessor {
   private readonly projectCache = new Map<string, string | null>();
+  private readonly unsupportedReferences = new Set<string>();
 
   constructor(private readonly gitlabClient: GitlabClient) {
   }
@@ -68,6 +69,10 @@ export class ComposerLockProcessor implements FileProcessor {
       ].filter((value): value is string => Boolean(value));
 
       for (const url of urls) {
+        if (this.isUnsupportedEndpoint(url, host, logger, projectId)) {
+          continue;
+        }
+
         const directPath = this.extractProjectPath(url, host);
         if (directPath) {
           dependencies.add(directPath);
@@ -194,6 +199,38 @@ export class ComposerLockProcessor implements FileProcessor {
       return { type: 'path', value: reference };
     } catch {
       return null;
+    }
+  }
+
+  private isUnsupportedEndpoint(
+    url: string,
+    host: string,
+    logger: LoggerService,
+    projectId: number,
+  ): boolean {
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname.toLowerCase() !== host) {
+        return false;
+      }
+
+      const pathname = parsed.pathname.toLowerCase();
+      if (!pathname.startsWith('/api/v4/groups/') && !pathname.startsWith('/api/v4/group/')) {
+        return false;
+      }
+
+      if (!this.unsupportedReferences.has(pathname)) {
+        this.unsupportedReferences.add(pathname);
+        logger.logProject(
+          projectId,
+          `Skipping GitLab group package endpoint '${parsed.pathname}'. Group-level Composer packages cannot be allowlisted automatically.`,
+          'warn',
+        );
+      }
+
+      return true;
+    } catch {
+      return false;
     }
   }
 

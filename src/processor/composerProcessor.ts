@@ -17,6 +17,8 @@ interface Repository {
  * Extracts GitLab-hosted repositories referenced within `composer.json` manifests.
  */
 export class ComposerProcessor implements FileProcessor {
+  private readonly unsupportedEndpoints = new Set<string>();
+
   /**
    * Parses a Composer manifest and captures dependency repository paths hosted on GitLab.
    *
@@ -39,6 +41,10 @@ export class ComposerProcessor implements FileProcessor {
         for (const [key, repo] of Object.entries(composerJson.repositories)) {
           const repository = repo as Repository;
           if (repository.url && repository.url.includes(strippedUrl)) {
+            if (this.isGroupEndpoint(repository.url, gitlabUrl, logger, projectId)) {
+              continue;
+            }
+
             const formattedDep = repository.url.replace(`https://${strippedUrl}/`, '');
             dependencies.push(formattedDep);
           } else {
@@ -55,5 +61,40 @@ export class ComposerProcessor implements FileProcessor {
     }
 
     return Promise.resolve(dependencies);
+  }
+
+  private isGroupEndpoint(url: string, gitlabUrl: string, logger: LoggerService, projectId: number): boolean {
+    try {
+      const parsed = new URL(url);
+      if (this.extractHost(parsed.origin) !== this.extractHost(gitlabUrl)) {
+        return false;
+      }
+
+      const pathname = parsed.pathname.toLowerCase();
+      if (!pathname.startsWith('/api/v4/groups/') && !pathname.startsWith('/api/v4/group/')) {
+        return false;
+      }
+
+      if (!this.unsupportedEndpoints.has(pathname)) {
+        this.unsupportedEndpoints.add(pathname);
+        logger.logProject(
+          projectId,
+          `Skipping GitLab group package endpoint '${parsed.pathname}'. Group-level Composer packages cannot be allowlisted automatically.`,
+          'warn',
+        );
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private extractHost(url: string): string {
+    try {
+      return new URL(url).host.toLowerCase();
+    } catch {
+      return url.replace(/^https?:\/\//, '').toLowerCase();
+    }
   }
 }
