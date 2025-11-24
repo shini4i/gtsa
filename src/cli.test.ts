@@ -1,12 +1,47 @@
 import { adjustTokenScope, adjustTokenScopeForAllProjects } from './scripts/adjust-token-scope';
+import { cliSchema, DEFAULT_REPORT_PATH } from './config/cliOptions';
+import LoggerService from './services/logger';
 
 jest.mock('./scripts/adjust-token-scope', () => ({
   adjustTokenScope: jest.fn().mockResolvedValue(undefined),
   adjustTokenScopeForAllProjects: jest.fn().mockResolvedValue(undefined),
 }));
 
+type MockLogger = jest.Mocked<LoggerService>;
+
+const loggerInstances: MockLogger[] = [];
+
+jest.mock('./services/logger', () => {
+  const LoggerMock = jest.fn(() => {
+    const instance = {
+      start: jest.fn().mockResolvedValue(undefined),
+      stop: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      setTotalProjects: jest.fn(),
+      startProject: jest.fn(),
+      setProjectName: jest.fn(),
+      logProject: jest.fn(),
+      updateProjectProgress: jest.fn(),
+      completeProject: jest.fn(),
+      failProject: jest.fn(),
+      updateGlobalProgress: jest.fn(),
+      clearGlobalProgress: jest.fn(),
+    } as unknown as MockLogger;
+    loggerInstances.push(instance);
+    return instance;
+  });
+
+  return {
+    __esModule: true,
+    default: LoggerMock,
+  };
+});
+
 const mockedAdjustTokenScope = adjustTokenScope as jest.MockedFunction<typeof adjustTokenScope>;
 const mockedAdjustTokenScopeForAllProjects = adjustTokenScopeForAllProjects as jest.MockedFunction<typeof adjustTokenScopeForAllProjects>;
+const LoggerServiceMock = LoggerService as unknown as jest.Mock;
 
 type CliAction = (options: any) => Promise<void>;
 
@@ -81,19 +116,20 @@ async function runCli(options: any) {
 }
 
 describe('cli entrypoint', () => {
-  let logSpy: jest.SpyInstance;
-  let errorSpy: jest.SpyInstance;
-
   beforeEach(() => {
     mockedAdjustTokenScope.mockReset();
     mockedAdjustTokenScopeForAllProjects.mockReset();
-    logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
-    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    loggerInstances.length = 0;
+    LoggerServiceMock.mockClear();
   });
 
-  afterEach(() => {
-    logSpy.mockRestore();
-    errorSpy.mockRestore();
+  it('registers CLI options and description from schema', async () => {
+    const { program } = await initializeCli();
+
+    expect(program.description).toHaveBeenCalledWith(cliSchema.description);
+    cliSchema.options.forEach(option => {
+      expect(program.option).toHaveBeenCalledWith(option.flags, option.description);
+    });
   });
 
   it('rejects using --all together with --project-id', async () => {
@@ -101,7 +137,7 @@ describe('cli entrypoint', () => {
 
     expect(exitError).toBeInstanceOf(ExitError);
     expect(exitError?.code).toBe(1);
-    expect(errorSpy).toHaveBeenCalledWith('Cannot use --all together with --project-id. Please choose one.');
+    expect(loggerInstances[0].error).toHaveBeenCalledWith('Cannot use --all together with --project-id. Please choose one.');
     expect(mockedAdjustTokenScope).not.toHaveBeenCalled();
     expect(mockedAdjustTokenScopeForAllProjects).not.toHaveBeenCalled();
   });
@@ -113,6 +149,7 @@ describe('cli entrypoint', () => {
     expect(exitError?.code).toBe(1);
     expect(program.outputHelp).toHaveBeenCalled();
     expect(mockedAdjustTokenScope).not.toHaveBeenCalled();
+    expect(loggerInstances[0].error).toHaveBeenCalledWith('Either --all or --project-id must be specified.');
   });
 
   it('requires --all when --report is specified', async () => {
@@ -120,7 +157,7 @@ describe('cli entrypoint', () => {
 
     expect(exitError).toBeInstanceOf(ExitError);
     expect(exitError?.code).toBe(1);
-    expect(errorSpy).toHaveBeenCalledWith('--report can only be used together with --all.');
+    expect(loggerInstances[0].error).toHaveBeenCalledWith('--report can only be used together with --all.');
     expect(mockedAdjustTokenScope).not.toHaveBeenCalled();
   });
 
@@ -129,7 +166,7 @@ describe('cli entrypoint', () => {
 
     expect(exitError).toBeInstanceOf(ExitError);
     expect(exitError?.code).toBe(1);
-    expect(errorSpy).toHaveBeenCalledWith('--report requires --dry-run to be enabled.');
+    expect(loggerInstances[0].error).toHaveBeenCalledWith('--report requires --dry-run to be enabled.');
     expect(mockedAdjustTokenScopeForAllProjects).not.toHaveBeenCalled();
   });
 
@@ -137,23 +174,23 @@ describe('cli entrypoint', () => {
     const { exitError } = await runCli({ all: true, dryRun: true, report: true, monorepo: undefined });
 
     expect(exitError).toBeUndefined();
-    expect(mockedAdjustTokenScopeForAllProjects).toHaveBeenCalledWith(true, false, 'gitlab-token-scope-report.yaml');
-    expect(logSpy).toHaveBeenCalledWith('Finished adjusting token scope for all projects!');
+    expect(mockedAdjustTokenScopeForAllProjects).toHaveBeenCalledWith(true, false, DEFAULT_REPORT_PATH, loggerInstances[0], undefined);
+    expect(loggerInstances[0].info).toHaveBeenCalledWith('Finished adjusting token scope for all projects!');
   });
 
   it('processes all projects with custom report path and monorepo flag', async () => {
     const { exitError } = await runCli({ all: true, dryRun: true, report: 'custom.yaml', monorepo: true });
 
     expect(exitError).toBeUndefined();
-    expect(mockedAdjustTokenScopeForAllProjects).toHaveBeenCalledWith(true, true, 'custom.yaml');
+    expect(mockedAdjustTokenScopeForAllProjects).toHaveBeenCalledWith(true, true, 'custom.yaml', loggerInstances[0], undefined);
   });
 
   it('processes a single project when a valid project id is provided', async () => {
     const { exitError } = await runCli({ projectId: '42', dryRun: true, monorepo: undefined });
 
     expect(exitError).toBeUndefined();
-    expect(mockedAdjustTokenScope).toHaveBeenCalledWith(42, true, false);
-    expect(logSpy).toHaveBeenCalledWith('Finished adjusting token scope!');
+    expect(mockedAdjustTokenScope).toHaveBeenCalledWith(42, true, false, loggerInstances[0]);
+    expect(loggerInstances[0].info).toHaveBeenCalledWith('Finished adjusting token scope!');
   });
 
   it('rejects invalid project id input', async () => {
@@ -161,8 +198,57 @@ describe('cli entrypoint', () => {
 
     expect(exitError).toBeInstanceOf(ExitError);
     expect(exitError?.code).toBe(1);
-    expect(errorSpy).toHaveBeenCalledWith('Invalid project ID');
+    expect(loggerInstances[0].error).toHaveBeenCalledWith('Invalid project ID');
     expect(mockedAdjustTokenScope).not.toHaveBeenCalled();
+  });
+
+  it('rejects project filtering flags when --all is not provided', async () => {
+    const { exitError } = await runCli({ projectId: '42', projectsPerPage: '10' });
+
+    expect(exitError).toBeInstanceOf(ExitError);
+    expect(loggerInstances[0].error).toHaveBeenCalledWith('Project filtering flags (--projects-*) require --all.');
+    expect(mockedAdjustTokenScopeForAllProjects).not.toHaveBeenCalled();
+  });
+
+  it('forwards project filtering options when scanning all projects', async () => {
+    const options = {
+      all: true,
+      dryRun: false,
+      projectsPerPage: '20',
+      projectsPageLimit: '2',
+      projectsSearch: 'runner',
+      projectsMembership: true,
+      projectsOwned: true,
+      projectsArchived: true,
+      projectsSimple: true,
+      projectsMinAccessLevel: '30',
+      projectsOrderBy: 'updated_at',
+      projectsSort: 'desc',
+      projectsVisibility: 'internal',
+    };
+
+    const { exitError } = await runCli(options);
+
+    expect(exitError).toBeUndefined();
+    expect(mockedAdjustTokenScopeForAllProjects).toHaveBeenCalledWith(
+      false,
+      false,
+      undefined,
+      loggerInstances[0],
+      {
+        perPage: 20,
+        pageLimit: 2,
+        search: 'runner',
+        membership: true,
+        owned: true,
+        archived: true,
+        simple: true,
+        minAccessLevel: 30,
+        orderBy: 'updated_at',
+        sort: 'desc',
+        visibility: 'internal',
+      },
+    );
   });
 
   it('exits with error when adjustment fails', async () => {
@@ -172,6 +258,16 @@ describe('cli entrypoint', () => {
 
     expect(exitError).toBeInstanceOf(ExitError);
     expect(exitError?.code).toBe(1);
-    expect(errorSpy).toHaveBeenCalledWith('Failed to adjust token scope:', expect.any(Error));
+    expect(loggerInstances[0].error).toHaveBeenCalledWith('Failed to adjust token scope: boom');
+  });
+
+  it('prints stack trace when debug flag is enabled', async () => {
+    mockedAdjustTokenScope.mockRejectedValueOnce(new Error('boom'));
+
+    const { exitError } = await runCli({ projectId: '1', debug: true });
+
+    expect(exitError).toBeInstanceOf(ExitError);
+    expect(exitError?.code).toBe(1);
+    expect(loggerInstances[0].error).toHaveBeenCalledWith(expect.stringContaining('Failed to adjust token scope: Error: boom'));
   });
 });

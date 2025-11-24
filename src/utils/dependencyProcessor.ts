@@ -1,5 +1,114 @@
 import { GitlabClient } from '../gitlab/gitlabClient';
 import { createFileProcessor } from '../processor/fileProcessor';
+import LoggerService from '../services/logger';
+
+const DEFAULT_DEPENDENCY_CONCURRENCY = 5;
+
+const dependencyProjectIdCache = new Map<string, number>();
+const dependencyAllowlistCache = new Map<string, boolean>();
+
+/**
+ * Controls how {@link processDependencies} schedules GitLab lookups and caches intermediate results.
+ *
+ * @property concurrency - Maximum number of dependencies processed in parallel. When omitted, the
+ * value is resolved from `GITLAB_DEPENDENCY_CONCURRENCY` or defaults to five concurrent workers.
+ * @property projectIdCache - Optional cache mapping dependency paths to resolved numeric project IDs.
+ * @property allowlistCache - Optional cache storing allow list checks keyed by `sourceId:dependencyId`.
+ */
+export interface DependencyProcessingOptions {
+  concurrency?: number;
+  projectIdCache?: Map<string, number>;
+  allowlistCache?: Map<string, boolean>;
+}
+
+/**
+ * Clears the shared dependency processing caches. Primarily used in tests to ensure isolated state.
+ */
+export function resetDependencyProcessingCaches(): void {
+  dependencyProjectIdCache.clear();
+  dependencyAllowlistCache.clear();
+}
+
+function normalizePositiveInteger(value: unknown): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
+  }
+
+  return Math.floor(parsed);
+}
+
+function resolveConcurrencyLimit(explicit?: number): number {
+  const explicitLimit = normalizePositiveInteger(explicit);
+  if (explicitLimit) {
+    return explicitLimit;
+  }
+
+  const envLimit = normalizePositiveInteger(process.env.GITLAB_DEPENDENCY_CONCURRENCY);
+  if (envLimit) {
+    return envLimit;
+  }
+
+  return DEFAULT_DEPENDENCY_CONCURRENCY;
+}
+
+function toAllowlistCacheKey(sourceProjectId: number, dependencyProjectId: number): string {
+  return `${sourceProjectId}:${dependencyProjectId}`;
+}
+
+/**
+ * Error thrown when a dependency manifest cannot be processed for a project.
+ *
+ * @property projectId - Project whose manifest failed to parse.
+ * @property file - Path of the dependency file that failed.
+ * @property cause - Underlying error thrown during processing.
+ */
+export class DependencyFileProcessingError extends Error {
+  readonly projectId: number;
+  readonly file: string;
+  readonly cause: unknown;
+
+  constructor(projectId: number, file: string, cause: unknown) {
+    super(`Failed to process dependency file ${file} for project ID ${projectId}`);
+    this.name = 'DependencyFileProcessingError';
+    this.projectId = projectId;
+    this.file = file;
+    this.cause = cause;
+  }
+}
+
+/**
+ * Captures the dependency identifier and underlying cause when processing fails.
+ *
+ * @property dependency - Dependency project path that could not be processed.
+ * @property cause - Root cause error or thrown value.
+ */
+export interface DependencyFailure {
+  dependency: string;
+  cause: unknown;
+}
+
+/**
+ * Aggregated error representing one or more dependency processing failures for a project.
+ *
+ * @property sourceProjectId - Project whose dependencies failed to adjust.
+ * @property failures - Collection of individual dependency failures.
+ */
+export class DependencyProcessingError extends Error {
+  readonly sourceProjectId: number;
+  readonly failures: DependencyFailure[];
+
+  constructor(sourceProjectId: number, failures: DependencyFailure[], message?: string) {
+    super(message ?? `Failed to process ${failures.length} dependencies for project ID ${sourceProjectId}`);
+    this.name = 'DependencyProcessingError';
+    this.sourceProjectId = sourceProjectId;
+    this.failures = failures;
+  }
+}
 
 /**
  * Processes a single dependency file and returns the extracted dependencies.
@@ -8,24 +117,36 @@ import { createFileProcessor } from '../processor/fileProcessor';
  * @param projectId - The ID of the project.
  * @param defaultBranch - The default branch of the project.
  * @param file - The path to the dependency file.
+ * @param logger - Logger used for emitting status updates.
  * @returns A promise that resolves to an array of extracted dependencies.
+ * @throws DependencyFileProcessingError when the file cannot be processed.
  */
-export async function processDependencyFile(gitlabClient: GitlabClient, projectId: number, defaultBranch: string, file: string): Promise<string[]> {
+export async function processDependencyFile(
+  gitlabClient: GitlabClient,
+  projectId: number,
+  defaultBranch: string,
+  file: string,
+  logger: LoggerService,
+): Promise<string[]> {
   try {
     const fileContent = await gitlabClient.getFileContent(projectId, file, defaultBranch);
     const processor = createFileProcessor(file, gitlabClient);
 
     if (!processor) {
+      logger.logProject(projectId, `No processor available for file type: ${file}`, 'warn');
       return [];
     }
 
-    const dependencies = await processor.extractDependencies(fileContent, gitlabClient.Url);
+    const dependencies = await processor.extractDependencies(fileContent, gitlabClient.Url, logger, projectId);
 
-    console.log(`Dependencies from \x1b[36m${file}\x1b[0m that match the GitLab URL: `, dependencies);
+    const formattedDependencies = dependencies.length > 0 ? dependencies.join(', ') : 'none';
+    logger.logProject(
+      projectId,
+      `Dependencies from ${file} that match the GitLab URL: ${formattedDependencies}`,
+    );
     return dependencies;
   } catch (error) {
-    console.error(`Failed to process dependency file ${file} for project ID ${projectId}:`, error);
-    throw error;
+    throw new DependencyFileProcessingError(projectId, file, error);
   }
 }
 
@@ -36,18 +157,41 @@ export async function processDependencyFile(gitlabClient: GitlabClient, projectI
  * @param projectId - The ID of the project.
  * @param defaultBranch - The default branch of the project.
  * @param dependencyFiles - An array of paths to the dependency files.
+ * @param logger - Logger used for emitting status updates.
  * @returns A promise that resolves to an array of aggregated dependencies.
+ * @throws DependencyProcessingError when any dependency file fails.
  */
-export async function processAllDependencyFiles(gitlabClient: GitlabClient, projectId: number, defaultBranch: string, dependencyFiles: string[]): Promise<string[]> {
+export async function processAllDependencyFiles(
+  gitlabClient: GitlabClient,
+  projectId: number,
+  defaultBranch: string,
+  dependencyFiles: string[],
+  logger: LoggerService,
+): Promise<string[]> {
   const allDependencies: string[] = [];
+  const fileErrors: DependencyFileProcessingError[] = [];
 
   for (const file of dependencyFiles) {
     try {
-      const dependencies = await processDependencyFile(gitlabClient, projectId, defaultBranch, file);
+      const dependencies = await processDependencyFile(gitlabClient, projectId, defaultBranch, file, logger);
       allDependencies.push(...dependencies);
     } catch (error) {
-      console.error(`Error processing file ${file}:`, error);
+      const normalizedError =
+        error instanceof DependencyFileProcessingError
+          ? error
+          : new DependencyFileProcessingError(projectId, file, error);
+      fileErrors.push(normalizedError);
     }
+  }
+
+  if (fileErrors.length > 0) {
+    const summary = fileErrors
+      .map(err => `${err.file}: ${(err.cause instanceof Error && err.cause.message) ? err.cause.message : 'Unknown error'}`)
+      .join('; ');
+    throw new DependencyProcessingError(projectId, fileErrors.map(err => ({
+      dependency: err.file,
+      cause: err.cause,
+    })), `Encountered ${fileErrors.length} error(s) while processing dependency files for project ID ${projectId}: ${summary}`);
   }
 
   return allDependencies;
@@ -59,21 +203,91 @@ export async function processAllDependencyFiles(gitlabClient: GitlabClient, proj
  * @param gitlabClient - The GitLab client instance.
  * @param dependencies - An array of dependency project names.
  * @param sourceProjectId - The ID of the source project.
+ * @param logger - Logger used for emitting status updates.
+ * The function deduplicates dependency names and executes GitLab operations with a bounded concurrency level
+ * derived from the provided options or the `GITLAB_DEPENDENCY_CONCURRENCY` environment variable.
+ *
+ * @param options - Optional overrides controlling concurrency and cache usage.
  * @returns A promise that resolves when all tasks are completed.
+ * @throws DependencyProcessingError when any dependency project fails to update.
  */
-export async function processDependencies(gitlabClient: GitlabClient, dependencies: string[], sourceProjectId: number) {
-  const tasks = dependencies.map(async (dependency: string) => {
+export async function processDependencies(
+  gitlabClient: GitlabClient,
+  dependencies: string[],
+  sourceProjectId: number,
+  logger: LoggerService,
+  options: DependencyProcessingOptions = {},
+): Promise<void> {
+  const uniqueDependencies = Array.from(new Set(dependencies));
+  if (uniqueDependencies.length === 0) {
+    return;
+  }
+
+  const projectIdCache = options.projectIdCache ?? dependencyProjectIdCache;
+  const allowlistCache = options.allowlistCache ?? dependencyAllowlistCache;
+  const concurrencyLimit = Math.min(
+    uniqueDependencies.length,
+    Math.max(1, resolveConcurrencyLimit(options.concurrency)),
+  );
+
+  const failures: DependencyFailure[] = [];
+  let nextIndex = 0;
+
+  const processSingleDependency = async (dependency: string) => {
     try {
-      const dependencyProjectId = await gitlabClient.getProjectId(dependency);
-      if (!await gitlabClient.isProjectWhitelisted(sourceProjectId, dependencyProjectId)) {
-        await gitlabClient.allowCiJobTokenAccess(dependencyProjectId.toString(), sourceProjectId.toString());
-        console.log(`===> Project was whitelisted in ${dependency} successfully`);
-      } else {
-        console.log(`===> Project is already whitelisted in ${dependency}, skipping...`);
+      let dependencyProjectId = projectIdCache.get(dependency);
+      if (dependencyProjectId === undefined) {
+        dependencyProjectId = await gitlabClient.getProjectId(dependency);
+        projectIdCache.set(dependency, dependencyProjectId);
       }
-    } catch (err) {
-      console.log(`Failed to grant token scope from project ${dependency} to source project: ${err}`);
+
+      const allowlistKey = toAllowlistCacheKey(sourceProjectId, dependencyProjectId);
+      let isWhitelisted = allowlistCache.get(allowlistKey);
+      if (isWhitelisted === undefined) {
+        isWhitelisted = await gitlabClient.isProjectWhitelisted(sourceProjectId, dependencyProjectId);
+        allowlistCache.set(allowlistKey, isWhitelisted);
+      }
+
+      if (!isWhitelisted) {
+        await gitlabClient.allowCiJobTokenAccess(dependencyProjectId.toString(), sourceProjectId.toString());
+        allowlistCache.set(allowlistKey, true);
+        logger.logProject(sourceProjectId, `Project was whitelisted in ${dependency} successfully`);
+      } else {
+        logger.logProject(sourceProjectId, `Project is already whitelisted in ${dependency}, skipping...`, 'warn');
+      }
+    } catch (error) {
+      failures.push({ dependency, cause: error });
+      logger.logProject(
+        sourceProjectId,
+        `Failed to whitelist dependency ${dependency}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'error',
+      );
     }
-  });
-  await Promise.all(tasks);
+  };
+
+  const worker = async () => {
+    while (true) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      if (currentIndex >= uniqueDependencies.length) {
+        break;
+      }
+
+      await processSingleDependency(uniqueDependencies[currentIndex]);
+    }
+  };
+
+  const workers = Array.from({ length: concurrencyLimit }, worker);
+  await Promise.all(workers);
+
+  if (failures.length > 0) {
+    const summary = failures
+      .map(failure => `${failure.dependency}: ${(failure.cause instanceof Error && failure.cause.message) ? failure.cause.message : 'Unknown error'}`)
+      .join('; ');
+    throw new DependencyProcessingError(
+      sourceProjectId,
+      failures,
+      `Failed to process ${failures.length} dependenc${failures.length === 1 ? 'y' : 'ies'} for project ID ${sourceProjectId}: ${summary}`,
+    );
+  }
 }

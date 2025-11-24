@@ -69,6 +69,14 @@ gitlab-token-scope-adjuster -p <your_project_id> --monorepo
 
 Keep in mind that depending on the amount of files in the repo it can significantly increase execution time.
 
+### HTTP resilience tuning (optional)
+
+You can override the GitLab HTTP client behaviour with the following environment variables:
+
+- `GITLAB_HTTP_TIMEOUT_MS` – request timeout in milliseconds (default: `10000`).
+- `GITLAB_HTTP_MAX_RETRIES` – number of retry attempts for retryable responses (default: `2`).
+- `GITLAB_HTTP_RETRY_DELAY_MS` – base delay between retries in milliseconds (default: `500`; the delay grows linearly per attempt).
+
 ### Process every accessible project
 
 You can iterate over every project visible to the provided token:
@@ -91,6 +99,7 @@ gitlab-token-scope-adjuster --all --dry-run --report reports/output.yaml
 - `--monorepo` – recurse through the repository tree when looking for dependency manifests.
 - `--all` – process every project the token can access instead of a single `--project-id`.
 - `--report [path]` – persist dry-run results for `--all` mode as YAML (defaults to `gitlab-token-scope-report.yaml`).
+- `--debug` – print full error stack traces for troubleshooting.
 
 ## Local development
 
